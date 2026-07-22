@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = [
+    "zcash-block-fees",
+    "zcash-mempool-visualizer",
+    "zcash-shielded-currents",
+    "zcash-supply-history",
+    "zcash-tx-fee",
+]
+
+[workspace.package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["dismad"]
+repository = "https://github.com/dismad/shieldedCurrents"
