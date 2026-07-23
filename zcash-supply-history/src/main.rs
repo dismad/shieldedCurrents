@@ -10,7 +10,11 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 #[derive(Parser, Debug)]
-#[command(author, version, about = "Fast Zcash total supply history generator (with cookie auth)")]
+#[command(
+    author,
+    version,
+    about = "Fast Zcash total supply history generator (with cookie auth)"
+)]
 struct Args {
     /// RPC URL[](http://127.0.0.1:8232). URL credentials work but cookie takes precedence.
     #[arg(long, env = "RPC_URL", default_value = "http://127.0.0.1:8232")]
@@ -105,10 +109,7 @@ fn build_client(cookie_path: Option<&PathBuf>) -> Result<reqwest::Client, Box<dy
         let content = std::fs::read_to_string(path)?.trim().to_string();
         if !content.is_empty() {
             let encoded = base64::engine::general_purpose::STANDARD.encode(content.as_bytes());
-            headers.insert(
-                header::AUTHORIZATION,
-                format!("Basic {}", encoded).parse()?,
-            );
+            headers.insert(header::AUTHORIZATION, format!("Basic {}", encoded).parse()?);
             println!("Using cookie authentication from: {}", path.display());
         }
     }
@@ -133,19 +134,15 @@ async fn rpc_call<T: for<'de> Deserialize<'de>>(
         "params": params
     });
 
-    let response: RpcResponse<T> = client
-        .post(url)
-        .json(&payload)
-        .send()
-        .await?
-        .json()
-        .await?;
+    let response: RpcResponse<T> = client.post(url).json(&payload).send().await?.json().await?;
 
     if let Some(err) = response.error {
         return Err(format!("RPC Error {}: {}", err.code, err.message).into());
     }
 
-    response.result.ok_or_else(|| "No result in RPC response".into())
+    response
+        .result
+        .ok_or_else(|| "No result in RPC response".into())
 }
 
 async fn rpc_batch_call(
@@ -177,7 +174,11 @@ async fn rpc_batch_call(
             let mut blocks = Vec::with_capacity(response.len());
             for (i, r) in response.into_iter().enumerate() {
                 if let Some(err) = r.error {
-                    return Err(format!("RPC Error in batch (height {}): {} {}", heights[i], err.code, err.message).into());
+                    return Err(format!(
+                        "RPC Error in batch (height {}): {} {}",
+                        heights[i], err.code, err.message
+                    )
+                    .into());
                 }
                 if let Some(block) = r.result {
                     blocks.push(block);
@@ -187,9 +188,12 @@ async fn rpc_batch_call(
             }
             Ok(blocks)
         }
-        Err(e) => {
-            Err(format!("Decode failed: {}. Raw response: {}", e, &text[..text.len().min(400)]).into())
-        }
+        Err(e) => Err(format!(
+            "Decode failed: {}. Raw response: {}",
+            e,
+            &text[..text.len().min(400)]
+        )
+        .into()),
     }
 }
 
@@ -204,9 +208,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let client = build_client(cookie_path.as_ref())?;
 
     println!("Fetching current block height from {}...", args.rpc_url);
-    let end_block: u64 = rpc_call(&client, &args.rpc_url, "getblockcount", serde_json::json!([])).await?;
+    let end_block: u64 = rpc_call(
+        &client,
+        &args.rpc_url,
+        "getblockcount",
+        serde_json::json!([]),
+    )
+    .await?;
 
-    println!("Latest block: {}. Sampling every {} blocks from {}...", end_block, args.step, args.start);
+    println!(
+        "Latest block: {}. Sampling every {} blocks from {}...",
+        end_block, args.step, args.start
+    );
 
     let heights: Vec<u64> = (args.start..=end_block).step_by(args.step).collect();
 
@@ -250,10 +263,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                         let mut points = Vec::with_capacity(chunk.len());
                         for &h in &chunk {
-                            match rpc_call::<Block>(&client, &url, "getblock", serde_json::json!([h.to_string(), 2])).await {
+                            match rpc_call::<Block>(
+                                &client,
+                                &url,
+                                "getblock",
+                                serde_json::json!([h.to_string(), 2]),
+                            )
+                            .await
+                            {
                                 Ok(block) => {
                                     let supply = block.chain_supply.chain_value.round() as i64;
-                                    let close = Utc.timestamp_opt(block.time, 0).unwrap().format("%m/%d/%Y").to_string();
+                                    let close = Utc
+                                        .timestamp_opt(block.time, 0)
+                                        .unwrap()
+                                        .format("%m/%d/%Y")
+                                        .to_string();
                                     points.push(DataPoint { supply, close });
                                 }
                                 Err(err) => eprintln!("Warning: Block {} failed: {}", h, err),
@@ -276,9 +300,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
     std::fs::write(&args.output, json + "\n")?;
 
     let elapsed = start_time.elapsed();
-    println!("Done! {} data points written to {}", data_points.len(), args.output);
+    println!(
+        "Done! {} data points written to {}",
+        data_points.len(),
+        args.output
+    );
     println!("Total time: {:.2} seconds", elapsed.as_secs_f64());
-    println!("(batch_size={}, parallel={})", args.batch_size, args.parallel);
+    println!(
+        "(batch_size={}, parallel={})",
+        args.batch_size, args.parallel
+    );
 
     Ok(())
 }

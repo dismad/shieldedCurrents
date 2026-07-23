@@ -155,7 +155,9 @@ struct BlockStats {
 
 fn determine_blocks(args: &Args) -> Result<Vec<u32>> {
     let tip = get_block_count()?;
-    if let Some(h) = args.block { return Ok(vec![h]); }
+    if let Some(h) = args.block {
+        return Ok(vec![h]);
+    }
     if let Some(n) = args.last {
         let start = if tip >= n { tip - n + 1 } else { 0 };
         return Ok((start..=tip).collect());
@@ -165,7 +167,9 @@ fn determine_blocks(args: &Args) -> Result<Vec<u32>> {
         if to_str.to_lowercase() == "tip" {
             tip
         } else {
-            to_str.parse::<u32>().context("Invalid --to (use number or 'tip')")?
+            to_str
+                .parse::<u32>()
+                .context("Invalid --to (use number or 'tip')")?
         }
     } else {
         tip
@@ -185,7 +189,14 @@ fn determine_blocks(args: &Args) -> Result<Vec<u32>> {
 fn get_block_count() -> Result<u32> {
     let client = Client::new();
     let (u, p) = get_credentials_from_env_or_cookie()?;
-    let res = rpc_call(&client, "http://127.0.0.1:8232", &u, &p, "getblockcount", vec![])?;
+    let res = rpc_call(
+        &client,
+        "http://127.0.0.1:8232",
+        &u,
+        &p,
+        "getblockcount",
+        vec![],
+    )?;
     Ok(res.as_u64().context("invalid getblockcount")? as u32)
 }
 
@@ -204,32 +215,52 @@ fn process_blocks_safe(
             .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} blocks ({eta})")?
             .progress_chars("#>-"));
         Some(pb)
-    } else { None };
+    } else {
+        None
+    };
 
     let results: Vec<(Option<BlockStats>, u32)> = blocks
         .par_iter()
         .with_max_len(3)
-        .map(|&height| {
-            match calculate_block_fees(client, url, user, pass, height, debug) {
+        .map(
+            |&height| match calculate_block_fees(client, url, user, pass, height, debug) {
                 Ok((total, timestamp, fallbacks, tx_count)) => {
-                    if let Some(pb) = &pb { pb.inc(1); }
-                    (Some(BlockStats { total_fee_zats: total, timestamp, fallback_misses: fallbacks, tx_count }), height)
+                    if let Some(pb) = &pb {
+                        pb.inc(1);
+                    }
+                    (
+                        Some(BlockStats {
+                            total_fee_zats: total,
+                            timestamp,
+                            fallback_misses: fallbacks,
+                            tx_count,
+                        }),
+                        height,
+                    )
                 }
                 Err(e) => {
                     eprintln!("Failed to process block {}: {}", height, e);
-                    if let Some(pb) = &pb { pb.inc(1); }
+                    if let Some(pb) = &pb {
+                        pb.inc(1);
+                    }
                     (None, height)
                 }
-            }
-        })
+            },
+        )
         .collect();
 
-    if let Some(pb) = pb { pb.finish(); }
+    if let Some(pb) = pb {
+        pb.finish();
+    }
 
     let mut stats = Vec::new();
     let mut failed = Vec::new();
     for (opt, h) in results {
-        if let Some(s) = opt { stats.push(s); } else { failed.push(h); }
+        if let Some(s) = opt {
+            stats.push(s);
+        } else {
+            failed.push(h);
+        }
     }
     Ok((stats, failed))
 }
@@ -244,7 +275,14 @@ fn calculate_block_fees(
 ) -> Result<(i64, i64, usize, u32)> {
     let hash = rpc_call(client, url, user, pass, "getblockhash", vec![json!(height)])?;
     let hash_str = hash.as_str().context("no hash")?.to_string();
-    let block = rpc_call(client, url, user, pass, "getblock", vec![json!(hash_str), json!(2)])?;
+    let block = rpc_call(
+        client,
+        url,
+        user,
+        pass,
+        "getblock",
+        vec![json!(hash_str), json!(2)],
+    )?;
 
     let timestamp = block["time"].as_i64().unwrap_or(0);
     let txs = block["tx"].as_array().context("no tx array")?;
@@ -254,11 +292,14 @@ fn calculate_block_fees(
 
     let mut missing_txids: HashSet<String> = HashSet::new();
     for tx in txs {
-        let is_coinbase = tx["vin"].as_array()
+        let is_coinbase = tx["vin"]
+            .as_array()
             .and_then(|v| v.first())
             .and_then(|v| v["coinbase"].as_str())
             .is_some();
-        if is_coinbase { continue; }
+        if is_coinbase {
+            continue;
+        }
 
         if let Some(vins) = tx["vin"].as_array() {
             for vin in vins {
@@ -281,7 +322,14 @@ fn calculate_block_fees(
             }
             let txids_vec: Vec<String> = missing_txids.into_iter().collect();
             for txid in txids_vec {
-                if let Ok(value) = rpc_call(client, url, user, pass, "getrawtransaction", vec![json!(&txid), json!(1)]) {
+                if let Ok(value) = rpc_call(
+                    client,
+                    url,
+                    user,
+                    pass,
+                    "getrawtransaction",
+                    vec![json!(&txid), json!(1)],
+                ) {
                     local_cache.put(txid, value);
                 }
             }
@@ -292,13 +340,17 @@ fn calculate_block_fees(
     let mut total_fallbacks = 0usize;
 
     for (i, tx) in txs.iter().enumerate() {
-        let is_coinbase = tx["vin"].as_array()
+        let is_coinbase = tx["vin"]
+            .as_array()
             .and_then(|v| v.first())
             .and_then(|v| v["coinbase"].as_str())
             .is_some();
-        if is_coinbase { continue; }
+        if is_coinbase {
+            continue;
+        }
 
-        let (fee, misses) = calculate_fee_from_tx(client, url, user, pass, tx, &mut local_cache, debug, i)?;
+        let (fee, misses) =
+            calculate_fee_from_tx(client, url, user, pass, tx, &mut local_cache, debug, i)?;
         total += fee;
         total_fallbacks += misses;
     }
@@ -330,7 +382,14 @@ fn calculate_fee_from_tx(
                     if debug {
                         eprintln!("Cache miss on {} (block {})", ptxid_str, tx_index);
                     }
-                    let fetched = rpc_call(client, url, user, pass, "getrawtransaction", vec![json!(ptxid), json!(1)])?;
+                    let fetched = rpc_call(
+                        client,
+                        url,
+                        user,
+                        pass,
+                        "getrawtransaction",
+                        vec![json!(ptxid), json!(1)],
+                    )?;
                     local_cache.put(ptxid_str.clone(), fetched.clone());
                     fallback_count += 1;
                     fetched
@@ -347,7 +406,8 @@ fn calculate_fee_from_tx(
         }
     }
 
-    let vout_sum: i64 = tx["vout"].as_array()
+    let vout_sum: i64 = tx["vout"]
+        .as_array()
         .map(|a| a.iter().filter_map(|v| v["valueZat"].as_i64()).sum())
         .unwrap_or(0);
 
@@ -361,7 +421,8 @@ fn calculate_fee_from_tx(
     }
 
     let sapling = tx["valueBalanceZat"].as_i64().unwrap_or(0);
-    let orchard = tx["orchard"].as_object()
+    let orchard = tx["orchard"]
+        .as_object()
         .and_then(|o| o["valueBalanceZat"].as_i64())
         .unwrap_or(0);
 
@@ -375,8 +436,12 @@ fn calculate_fee_from_tx(
 // ────────────────────────────────────────────────
 
 fn get_credentials(args: &Args) -> Result<(String, String)> {
-    if let (Some(u), Some(p)) = (&args.user, &args.pass) { return Ok((u.clone(), p.clone())); }
-    if let Some(ref p) = args.cookie_file { return read_cookie_file(p); }
+    if let (Some(u), Some(p)) = (&args.user, &args.pass) {
+        return Ok((u.clone(), p.clone()));
+    }
+    if let Some(ref p) = args.cookie_file {
+        return read_cookie_file(p);
+    }
     let home = dirs::home_dir().context("no home dir")?;
     let candidates = vec![
         home.join(".cache").join("zebra").join(".cookie"),
@@ -387,7 +452,9 @@ fn get_credentials(args: &Args) -> Result<(String, String)> {
     for p in candidates {
         if p.exists() {
             if let Ok(creds) = read_cookie_file(&p) {
-                if !args.quiet { eprintln!("Using cookie file: {}", p.display()); }
+                if !args.quiet {
+                    eprintln!("Using cookie file: {}", p.display());
+                }
                 return Ok(creds);
             }
         }
@@ -428,19 +495,32 @@ fn rpc_call(
     method: &str,
     params: Vec<Value>,
 ) -> Result<Value> {
-    let req = json!({ "jsonrpc": "1.0", "id": "zcash-block-fees", "method": method, "params": params });
+    let req =
+        json!({ "jsonrpc": "1.0", "id": "zcash-block-fees", "method": method, "params": params });
     let mut builder = client.post(url).json(&req);
     if !user.is_empty() {
         builder = builder.basic_auth(user, (!pass.is_empty()).then_some(pass));
     }
-    let resp: Value = builder.send().context("RPC send failed")?.json().context("RPC JSON parse failed")?;
+    let resp: Value = builder
+        .send()
+        .context("RPC send failed")?
+        .json()
+        .context("RPC JSON parse failed")?;
     if let Some(err) = resp.get("error") {
-        if !err.is_null() { anyhow::bail!("RPC error: {}", err); }
+        if !err.is_null() {
+            anyhow::bail!("RPC error: {}", err);
+        }
     }
     Ok(resp["result"].clone())
 }
 
-fn write_pretty_json(path: &PathBuf, blocks: &[u32], stats: &[BlockStats], date_format: &str, include_tx_count: bool) -> Result<()> {
+fn write_pretty_json(
+    path: &PathBuf,
+    blocks: &[u32],
+    stats: &[BlockStats],
+    date_format: &str,
+    include_tx_count: bool,
+) -> Result<()> {
     let mut data = vec![];
     for (i, &b) in blocks.iter().enumerate() {
         let s = &stats[i];
@@ -448,54 +528,111 @@ fn write_pretty_json(path: &PathBuf, blocks: &[u32], stats: &[BlockStats], date_
             DateTime::<Utc>::from_timestamp(s.timestamp, 0)
                 .map(|dt| dt.format(date_format).to_string())
                 .unwrap_or_else(|| "unknown".to_string())
-        } else { "unknown".to_string() };
-        data.push(BlockEntry { 
-            date: date_str, 
-            block: b, 
+        } else {
+            "unknown".to_string()
+        };
+        data.push(BlockEntry {
+            date: date_str,
+            block: b,
             fees: s.total_fee_zats as f64 / 1e8,
-            tx_count: if include_tx_count { Some(s.tx_count) } else { None },
+            tx_count: if include_tx_count {
+                Some(s.tx_count)
+            } else {
+                None
+            },
         });
     }
     let pretty = serde_json::to_string_pretty(&data)?;
     fs::write(path, pretty)?;
-    println!("JSON output written ({} blocks): {}", data.len(), path.display());
+    println!(
+        "JSON output written ({} blocks): {}",
+        data.len(),
+        path.display()
+    );
     Ok(())
 }
 
-fn generate_graph(blocks: &[u32], stats: &[BlockStats], path: &PathBuf, width: u32, height: u32) -> Result<()> {
+fn generate_graph(
+    blocks: &[u32],
+    stats: &[BlockStats],
+    path: &PathBuf,
+    width: u32,
+    height: u32,
+) -> Result<()> {
     let max_points = 2000;
-    let step = if blocks.len() > max_points { blocks.len() / max_points } else { 1 };
-    let points: Vec<(u32, f64)> = blocks.iter().step_by(step)
+    let step = if blocks.len() > max_points {
+        blocks.len() / max_points
+    } else {
+        1
+    };
+    let points: Vec<(u32, f64)> = blocks
+        .iter()
+        .step_by(step)
         .zip(stats.iter().step_by(step))
         .map(|(&b, s)| (b, s.total_fee_zats as f64 / 1e8))
         .collect();
 
     let root = SVGBackend::new(path.to_str().unwrap(), (width, height)).into_drawing_area();
     root.fill(&WHITE)?;
-    let max_fee = points.iter().map(|(_, f)| *f).max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap_or(0.0);
+    let max_fee = points
+        .iter()
+        .map(|(_, f)| *f)
+        .max_by(|a, b| a.partial_cmp(b).unwrap())
+        .unwrap_or(0.0);
 
     let mut chart = ChartBuilder::on(&root)
         .caption("Zcash Block Fees Over Time", ("sans-serif", 30))
         .margin(10)
         .x_label_area_size(40)
         .y_label_area_size(60)
-        .build_cartesian_2d(*blocks.first().unwrap_or(&0)..*blocks.last().unwrap_or(&0), 0.0..(max_fee * 1.1))?;
+        .build_cartesian_2d(
+            *blocks.first().unwrap_or(&0)..*blocks.last().unwrap_or(&0),
+            0.0..(max_fee * 1.1),
+        )?;
 
-    chart.configure_mesh().x_desc("Block Height").y_desc("Fees (ZEC)").draw()?;
+    chart
+        .configure_mesh()
+        .x_desc("Block Height")
+        .y_desc("Fees (ZEC)")
+        .draw()?;
     chart.draw_series(LineSeries::new(points, &BLUE))?;
     root.present()?;
     println!("Graph saved to {}", path.display());
     Ok(())
 }
 
-fn print_summary(processed: usize, total_zats: i64, total_txs: u32, elapsed: f64, include_tx_count: bool) {
+fn print_summary(
+    processed: usize,
+    total_zats: i64,
+    total_txs: u32,
+    elapsed: f64,
+    include_tx_count: bool,
+) {
     println!("\n=== BLOCK FEES SUMMARY ===");
     println!("Blocks processed   : {}", processed);
     if include_tx_count {
         println!("Total transactions : {}", total_txs);
-        println!("Avg txs per block  : {:.1}", if processed > 0 { total_txs as f64 / processed as f64 } else { 0.0 });
+        println!(
+            "Avg txs per block  : {:.1}",
+            if processed > 0 {
+                total_txs as f64 / processed as f64
+            } else {
+                0.0
+            }
+        );
     }
-    println!("Total fees         : {} Zats ({:.4} ZEC)", total_zats, total_zats as f64 / 1e8);
+    println!(
+        "Total fees         : {} Zats ({:.4} ZEC)",
+        total_zats,
+        total_zats as f64 / 1e8
+    );
     println!("Time               : {:.2}s", elapsed);
-    println!("Avg fee per block  : {:.0} Zats", if processed > 0 { total_zats as f64 / processed as f64 } else { 0.0 });
+    println!(
+        "Avg fee per block  : {:.0} Zats",
+        if processed > 0 {
+            total_zats as f64 / processed as f64
+        } else {
+            0.0
+        }
+    );
 }
