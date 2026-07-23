@@ -21,7 +21,7 @@ These tools were originally developed inside the [ZecHub wiki](https://github.co
 - A running [Zebra](https://github.com/ZcashFoundation/zebra) node with RPC enabled
   (default: `http://127.0.0.1:8232`)
 
-Most tools expect to talk to a local Zebra instance.
+Most tools expect to talk to a local Zebra instance. Double check cookie location. Fork and customize as needed <3.
 
 ## Quick Start
 
