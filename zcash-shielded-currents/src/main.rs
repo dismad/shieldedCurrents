@@ -225,7 +225,7 @@ impl Rpc {
 
 fn detect_pools_and_values(
     tx: &RawTx,
-) -> (String, bool, i64, i64, i64, i64, u32, u32, u32, u32) {
+) -> (String, bool, i64, i64, i64, i64, u32, u32, u32, u32, u32) {
     let is_cb = tx.vin.first().and_then(|v| v.coinbase.as_deref()).is_some();
     let mut pools = Vec::new();
     if tx.vin.iter().any(|v| v.txid.is_some()) || tx.vout.iter().any(|v| v.value_zat > 0) {
