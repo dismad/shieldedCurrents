@@ -56,7 +56,7 @@ struct Vout {
 }
 
 #[derive(Deserialize, Debug, Clone, Default)]
-struct Orchard {
+struct ShieldedPool {
     actions: Option<Vec<Value>>,
     #[serde(rename = "valueBalanceZat", default)]
     value_balance_zat: Option<i64>,
@@ -81,7 +81,9 @@ struct RawTx {
     #[serde(rename = "vShieldedOutput", default)]
     v_shielded_output: Option<Vec<Value>>,
     #[serde(default)]
-    orchard: Option<Orchard>,
+    orchard: Option<ShieldedPool>,
+    #[serde(default)]
+    ironwood: Option<ShieldedPool>,
     #[serde(rename = "valueBalanceZat", default)]
     value_balance_zat: Option<i64>,
 }
@@ -97,11 +99,13 @@ struct TxMetrics {
     transparent: f64,
     sapling: f64,
     orchard: f64,
+    ironwood: f64,
     pool_type: String,
     is_coinbase: bool,
     vout_count: u32,
     vshielded_count: u32,
     orchard_count: u32,
+    ironwood_count: u32,
 }
 
 #[derive(Clone)]
@@ -219,7 +223,9 @@ impl Rpc {
     }
 }
 
-fn detect_pools_and_values(tx: &RawTx) -> (String, bool, i64, i64, i64, u32, u32, u32, u32) {
+fn detect_pools_and_values(
+    tx: &RawTx,
+) -> (String, bool, i64, i64, i64, i64, u32, u32, u32, u32) {
     let is_cb = tx.vin.first().and_then(|v| v.coinbase.as_deref()).is_some();
     let mut pools = Vec::new();
     if tx.vin.iter().any(|v| v.txid.is_some()) || tx.vout.iter().any(|v| v.value_zat > 0) {
@@ -247,6 +253,14 @@ fn detect_pools_and_values(tx: &RawTx) -> (String, bool, i64, i64, i64, u32, u32
     {
         pools.push("Orchard");
     }
+    if tx
+        .ironwood
+        .as_ref()
+        .and_then(|o| o.actions.as_ref())
+        .map_or(false, |a| !a.is_empty())
+    {
+        pools.push("Ironwood");
+    }
     let pool_type = if is_cb {
         "Coinbase".to_string()
     } else if pools.is_empty() {
@@ -261,7 +275,12 @@ fn detect_pools_and_values(tx: &RawTx) -> (String, bool, i64, i64, i64, u32, u32
         .as_ref()
         .and_then(|o| o.actions.as_ref())
         .map_or(0, |a| a.len() as u32);
-    let transfers = vout_count + vshielded_count + orchard_count;
+    let ironwood_count = tx
+        .ironwood
+        .as_ref()
+        .and_then(|o| o.actions.as_ref())
+        .map_or(0, |a| a.len() as u32);
+    let transfers = vout_count + vshielded_count + orchard_count + ironwood_count;
     let t = tx.vout.iter().map(|v| v.value_zat).sum::<i64>();
     let s = tx.value_balance_zat.unwrap_or(0);
     let o = tx
@@ -269,16 +288,23 @@ fn detect_pools_and_values(tx: &RawTx) -> (String, bool, i64, i64, i64, u32, u32
         .as_ref()
         .and_then(|or| or.value_balance_zat)
         .unwrap_or(0);
+    let i = tx
+        .ironwood
+        .as_ref()
+        .and_then(|iw| iw.value_balance_zat)
+        .unwrap_or(0);
     (
         pool_type,
         is_cb,
         t,
         s,
         o,
+        i,
         transfers,
         vout_count,
         vshielded_count,
         orchard_count,
+        ironwood_count,
     )
 }
 
@@ -372,10 +398,12 @@ async fn process_block(
                             t_zat,
                             s_zat,
                             o_zat,
+                            i_zat,
                             transfers,
                             vout_count,
                             vshielded_count,
                             orchard_count,
+                            ironwood_count,
                         ) = detect_pools_and_values(&tx);
                         // ==================== CORRECT FEE CALCULATION (matches zcash-block-fees) ====================
                         let fee_zat = if !calculate_fees || is_cb {
@@ -402,8 +430,8 @@ async fn process_block(
                                     vpub_new += j["vpub_newZat"].as_i64().unwrap_or(0);
                                 }
                             }
-                            // Official Zcash fee formula
-                            input_sum - output_sum - vpub_old + vpub_new + s_zat + o_zat
+                            // Official Zcash fee formula (value balances for Sapling/Orchard/Ironwood)
+                            input_sum - output_sum - vpub_old + vpub_new + s_zat + o_zat + i_zat
                         };
                         // ============================================================================================
                         res.push(TxMetrics {
@@ -412,15 +440,17 @@ async fn process_block(
                             txid: tx.txid,
                             transfers,
                             fee_zec: fee_zat as f64 / 100_000_000.0,
-                            value_out: (t_zat + s_zat + o_zat) as f64 / 100_000_000.0,
+                            value_out: (t_zat + s_zat + o_zat + i_zat) as f64 / 100_000_000.0,
                             transparent: t_zat as f64 / 100_000_000.0,
                             sapling: s_zat as f64 / 100_000_000.0,
                             orchard: o_zat as f64 / 100_000_000.0,
+                            ironwood: i_zat as f64 / 100_000_000.0,
                             pool_type,
                             is_coinbase: is_cb,
                             vout_count,
                             vshielded_count,
                             orchard_count,
+                            ironwood_count,
                         });
                     }
                     Err(e) => {
@@ -584,7 +614,7 @@ fn write_myresults_md(metrics: &[TxMetrics], out: &Path) -> Result<()> {
         let cb = if m.is_coinbase { "IsCoinbase" } else { "" };
         writeln!(
             f,
-            "{} | {} | {} | {} | {:.8} | {:.8} | {:.8} | {:.8} | {:.8} | {} | {}",
+            "{} | {} | {} | {} | {:.8} | {:.8} | {:.8} | {:.8} | {:.8} | {:.8} | {} | {}",
             date,
             m.block,
             m.txid,
@@ -594,6 +624,7 @@ fn write_myresults_md(metrics: &[TxMetrics], out: &Path) -> Result<()> {
             m.transparent,
             m.sapling,
             m.orchard,
+            m.ironwood,
             m.pool_type,
             cb
         )?;
@@ -615,14 +646,15 @@ async fn write_summary_md(
         .count();
     let pure_s = metrics.iter().filter(|m| m.pool_type == "Sapling").count();
     let pure_o = metrics.iter().filter(|m| m.pool_type == "Orchard").count();
+    let pure_i = metrics.iter().filter(|m| m.pool_type == "Ironwood").count();
     let pure_sprout = metrics.iter().filter(|m| m.pool_type == "Sprout").count();
     let mixed_total = metrics.iter().filter(|m| m.pool_type.contains(',')).count();
     let cb = metrics.iter().filter(|m| m.is_coinbase).count();
     let unknown = metrics.iter().filter(|m| m.pool_type == "Unknown").count();
-    let sum = pure_t + pure_s + pure_o + pure_sprout + mixed_total + cb + unknown;
-    println!("Pool verification: Pure T={} | S={} | O={} | Sprout={} | Mixed={} | CB={} | Unknown={} → Sum={} / Total={}",
-        pure_t, pure_s, pure_o, pure_sprout, mixed_total, cb, unknown, sum, total_txs);
-    // ==================== MIXED BREAKDOWN (unchanged) ====================
+    let sum = pure_t + pure_s + pure_o + pure_i + pure_sprout + mixed_total + cb + unknown;
+    println!("Pool verification: Pure T={} | S={} | O={} | I={} | Sprout={} | Mixed={} | CB={} | Unknown={} → Sum={} / Total={}",
+        pure_t, pure_s, pure_o, pure_i, pure_sprout, mixed_total, cb, unknown, sum, total_txs);
+    // ==================== MIXED BREAKDOWN ====================
     let ts_mixed = metrics
         .iter()
         .filter(|m| m.pool_type == "Transparent,Sapling")
@@ -631,21 +663,36 @@ async fn write_summary_md(
         .iter()
         .filter(|m| m.pool_type == "Transparent,Orchard")
         .count();
+    let ti_mixed = metrics
+        .iter()
+        .filter(|m| m.pool_type == "Transparent,Ironwood")
+        .count();
     let so_mixed = metrics
         .iter()
         .filter(|m| m.pool_type == "Sapling,Orchard")
+        .count();
+    let si_mixed = metrics
+        .iter()
+        .filter(|m| m.pool_type == "Sapling,Ironwood")
+        .count();
+    let oi_mixed = metrics
+        .iter()
+        .filter(|m| m.pool_type == "Orchard,Ironwood")
         .count();
     let tso_mixed = metrics
         .iter()
         .filter(|m| m.pool_type == "Transparent,Sapling,Orchard")
         .count();
-    let other_mixed = mixed_total - ts_mixed - to_mixed - so_mixed - tso_mixed;
+    let other_mixed = mixed_total - ts_mixed - to_mixed - ti_mixed - so_mixed - si_mixed - oi_mixed - tso_mixed;
     println!("\nMixed Transaction Breakdown:");
     println!(" Transparent + Sapling : {}", ts_mixed);
     println!(" Transparent + Orchard : {}", to_mixed);
+    println!(" Transparent + Ironwood : {}", ti_mixed);
     println!(" Sapling + Orchard : {}", so_mixed);
+    println!(" Sapling + Ironwood : {}", si_mixed);
+    println!(" Orchard + Ironwood : {}", oi_mixed);
     println!(" Transparent + Sapling + Orchard: {}", tso_mixed);
-    println!(" Other mixed (incl Sprout) : {}", other_mixed);
+    println!(" Other mixed : {}", other_mixed);
     println!("Total Mixed : {}", mixed_total);
     // ==================== NEW PERCENTAGE MATRIX ====================
     let total = total_txs as f64;
@@ -669,6 +716,11 @@ async fn write_summary_md(
         (pure_o as f64 / total * 100.0)
     );
     println!(
+        " Pure Ironwood : {:>6} ({:.2}%)",
+        pure_i,
+        (pure_i as f64 / total * 100.0)
+    );
+    println!(
         " Pure Sprout : {:>6} ({:.2}%)",
         pure_sprout,
         (pure_sprout as f64 / total * 100.0)
@@ -684,9 +736,24 @@ async fn write_summary_md(
         (to_mixed as f64 / total * 100.0)
     );
     println!(
+        " Mixed Transparent+ Ironwood : {:>6} ({:.2}%)",
+        ti_mixed,
+        (ti_mixed as f64 / total * 100.0)
+    );
+    println!(
         " Mixed Sapling+ Orchard : {:>6} ({:.2}%)",
         so_mixed,
         (so_mixed as f64 / total * 100.0)
+    );
+    println!(
+        " Mixed Sapling+ Ironwood : {:>6} ({:.2}%)",
+        si_mixed,
+        (si_mixed as f64 / total * 100.0)
+    );
+    println!(
+        " Mixed Orchard+ Ironwood : {:>6} ({:.2}%)",
+        oi_mixed,
+        (oi_mixed as f64 / total * 100.0)
     );
     println!(
         " Mixed T+S+O : {:>6} ({:.2}%)",
@@ -729,7 +796,8 @@ async fn write_summary_md(
     let t_transfer: u32 = metrics.iter().map(|m| m.vout_count).sum();
     let s_transfer: u32 = metrics.iter().map(|m| m.vshielded_count).sum();
     let o_transfer: u32 = metrics.iter().map(|m| m.orchard_count).sum();
-    let total_transfer = t_transfer + s_transfer + o_transfer;
+    let i_transfer: u32 = metrics.iter().map(|m| m.ironwood_count).sum();
+    let total_transfer = t_transfer + s_transfer + o_transfer + i_transfer;
     let t_tx_count = metrics
         .iter()
         .filter(|m| m.pool_type.contains("Transparent"))
@@ -756,6 +824,14 @@ async fn write_summary_md(
     } else {
         0.0
     };
+    let i_in = metrics.iter().filter(|m| m.ironwood < 0.0).count();
+    let i_out = metrics.iter().filter(|m| m.ironwood > 0.0).count();
+    let i_total = i_in + i_out;
+    let i_pct = if total_txs > 0 {
+        (i_total as f64 / total_txs as f64 * 100.0).round()
+    } else {
+        0.0
+    };
     let s_inflow: f64 = metrics
         .iter()
         .filter(|m| m.sapling < 0.0)
@@ -778,6 +854,17 @@ async fn write_summary_md(
         .map(|m| m.orchard)
         .sum();
     let o_flow = o_outflow + o_inflow;
+    let i_inflow: f64 = metrics
+        .iter()
+        .filter(|m| m.ironwood < 0.0)
+        .map(|m| m.ironwood)
+        .sum();
+    let i_outflow: f64 = metrics
+        .iter()
+        .filter(|m| m.ironwood > 0.0)
+        .map(|m| m.ironwood)
+        .sum();
+    let i_flow = i_outflow + i_inflow;
     let info = rpc
         .rpc::<Value>("getblockchaininfo", serde_json::json!([]))
         .await?;
@@ -791,6 +878,7 @@ async fn write_summary_md(
     let mut sprout = 0.0;
     let mut sapling = 0.0;
     let mut orchard = 0.0;
+    let mut ironwood = 0.0;
     let mut lockbox = 0.0;
     for pool in value_pools {
         if let (Some(id), Some(val)) = (pool["id"].as_str(), pool["chainValue"].as_f64()) {
@@ -799,32 +887,40 @@ async fn write_summary_md(
                 "sprout" => sprout = val,
                 "sapling" => sapling = val,
                 "orchard" => orchard = val,
+                "ironwood" => ironwood = val,
                 "lockbox" => lockbox = val,
                 _ => {}
             }
         }
     }
     let total_chain = chain_supply;
-    let total_shielded = sprout + sapling + orchard + lockbox;
+    let total_shielded = sprout + sapling + orchard + ironwood + lockbox;
     let mixed_breakdown = format!(
         "Mixed Transaction Breakdown:\n\
          Transparent + Sapling : {}\n\
          Transparent + Orchard : {}\n\
+         Transparent + Ironwood : {}\n\
          Sapling + Orchard : {}\n\
+         Sapling + Ironwood : {}\n\
+         Orchard + Ironwood : {}\n\
          Transparent + Sapling + Orchard: {}\n\
-         Other mixed (incl Sprout) : {}\n\
+         Other mixed : {}\n\
          Total Mixed : {}\n",
-        ts_mixed, to_mixed, so_mixed, tso_mixed, other_mixed, mixed_total
+        ts_mixed, to_mixed, ti_mixed, so_mixed, si_mixed, oi_mixed, tso_mixed, other_mixed, mixed_total
     );
     let percentage_matrix = format!(
         "Transaction Type Percentages (of {} total transactions):\n\
          Pure Transparent : {:>6} ({:.2}%)\n\
          Pure Sapling : {:>6} ({:.2}%)\n\
          Pure Orchard : {:>6} ({:.2}%)\n\
+         Pure Ironwood : {:>6} ({:.2}%)\n\
          Pure Sprout : {:>6} ({:.2}%)\n\
          Mixed Transparent+ Sapling : {:>6} ({:.2}%)\n\
          Mixed Transparent+ Orchard : {:>6} ({:.2}%)\n\
+         Mixed Transparent+ Ironwood : {:>6} ({:.2}%)\n\
          Mixed Sapling+ Orchard : {:>6} ({:.2}%)\n\
+         Mixed Sapling+ Ironwood : {:>6} ({:.2}%)\n\
+         Mixed Orchard+ Ironwood : {:>6} ({:.2}%)\n\
          Mixed T+S+O : {:>6} ({:.2}%)\n\
          Other Mixed : {:>6} ({:.2}%)\n\
          Coinbase : {:>6} ({:.2}%)\n\
@@ -838,14 +934,22 @@ async fn write_summary_md(
         (pure_s as f64 / total * 100.0),
         pure_o,
         (pure_o as f64 / total * 100.0),
+        pure_i,
+        (pure_i as f64 / total * 100.0),
         pure_sprout,
         (pure_sprout as f64 / total * 100.0),
         ts_mixed,
         (ts_mixed as f64 / total * 100.0),
         to_mixed,
         (to_mixed as f64 / total * 100.0),
+        ti_mixed,
+        (ti_mixed as f64 / total * 100.0),
         so_mixed,
         (so_mixed as f64 / total * 100.0),
+        si_mixed,
+        (si_mixed as f64 / total * 100.0),
+        oi_mixed,
+        (oi_mixed as f64 / total * 100.0),
         tso_mixed,
         (tso_mixed as f64 / total * 100.0),
         other_mixed,
@@ -865,6 +969,7 @@ async fn write_summary_md(
 {t_transfer} t transfer txs
 {s_transfer} s transfer txs
 {o_transfer} o transfer txs
+{i_transfer} i transfer txs
 {total_transfer} total transfer txs
 T txs : {t_tx_count} (=> {shielded_pct:.2}% Shielded)
 S txs in : {s_in}
@@ -879,6 +984,12 @@ O txs : {o_total} ( {o_pct:.2}% )
 O Inflows : {o_inflow:.8} ZEC
 O Outflows: {o_outflow:.8} ZEC
 O flow => : {o_flow:.8} ZEC
+I txs in : {i_in}
+I txs out : {i_out}
+I txs : {i_total} ( {i_pct:.2}% )
+I Inflows : {i_inflow:.8} ZEC
+I Outflows: {i_outflow:.8} ZEC
+I flow => : {i_flow:.8} ZEC
 
 {mixed_breakdown}
 {percentage_matrix}
@@ -887,6 +998,7 @@ Total Transparent supply: {transparent:.8}
 Total Sprout supply: {sprout:.8}
 Total Sapling supply: {sapling:.8}
 Total Orchard supply: {orchard:.8}
+Total Ironwood supply: {ironwood:.8}
 Total Lockbox supply: {lockbox:.8}
 -------------------------------------------
 Total Shielded supply: {total_shielded:.8}
@@ -900,6 +1012,7 @@ Total Shielded supply: {total_shielded:.8}
         t_transfer = t_transfer,
         s_transfer = s_transfer,
         o_transfer = o_transfer,
+        i_transfer = i_transfer,
         total_transfer = total_transfer,
         t_tx_count = t_tx_count,
         shielded_pct = shielded_pct,
@@ -917,11 +1030,19 @@ Total Shielded supply: {total_shielded:.8}
         o_inflow = o_inflow,
         o_outflow = o_outflow,
         o_flow = o_flow,
+        i_in = i_in,
+        i_out = i_out,
+        i_total = i_total,
+        i_pct = i_pct,
+        i_inflow = i_inflow,
+        i_outflow = i_outflow,
+        i_flow = i_flow,
         total_chain = total_chain,
         transparent = transparent,
         sprout = sprout,
         sapling = sapling,
         orchard = orchard,
+        ironwood = ironwood,
         lockbox = lockbox,
         total_shielded = total_shielded,
         mixed_breakdown = mixed_breakdown,
@@ -938,10 +1059,12 @@ fn write_pool_currents(metrics: &[TxMetrics], out: &Path) -> Result<()> {
     let mut out_s = File::create(out.join("myResultsOutS.md"))?;
     let mut in_o = File::create(out.join("myResultsInO.md"))?;
     let mut out_o = File::create(out.join("myResultsOutO.md"))?;
+    let mut in_i = File::create(out.join("myResultsInI.md"))?;
+    let mut out_i = File::create(out.join("myResultsOutI.md"))?;
     for m in metrics {
         let date = format_date(m.time);
         let line = format!(
-            "{} | {} | {} | {} | {:.8} | {:.8} | {:.8} | {:.8} | {:.8} | {} | {}\n",
+            "{} | {} | {} | {} | {:.8} | {:.8} | {:.8} | {:.8} | {:.8} | {:.8} | {} | {}\n",
             date,
             m.block,
             m.txid,
@@ -951,6 +1074,7 @@ fn write_pool_currents(metrics: &[TxMetrics], out: &Path) -> Result<()> {
             m.transparent,
             m.sapling,
             m.orchard,
+            m.ironwood,
             m.pool_type,
             if m.is_coinbase { "IsCoinbase" } else { "" }
         );
@@ -969,6 +1093,12 @@ fn write_pool_currents(metrics: &[TxMetrics], out: &Path) -> Result<()> {
         if m.pool_type.contains("Orchard") && m.orchard > 0.0 {
             let _ = out_o.write_all(line.as_bytes());
         }
+        if m.pool_type.contains("Ironwood") && m.ironwood < 0.0 {
+            let _ = in_i.write_all(line.as_bytes());
+        }
+        if m.pool_type.contains("Ironwood") && m.ironwood > 0.0 {
+            let _ = out_i.write_all(line.as_bytes());
+        }
     }
     Ok(())
 }
@@ -984,6 +1114,7 @@ mod tests {
         has_sapling_spend: bool,
         has_sapling_output: bool,
         has_orchard: bool,
+        has_ironwood: bool,
         is_coinbase: bool,
     ) -> RawTx {
         RawTx {
@@ -1028,9 +1159,17 @@ mod tests {
                 None
             },
             orchard: if has_orchard {
-                Some(Orchard {
+                Some(ShieldedPool {
                     actions: Some(vec![serde_json::json!({})]),
                     value_balance_zat: Some(-500_000_000),
+                })
+            } else {
+                None
+            },
+            ironwood: if has_ironwood {
+                Some(ShieldedPool {
+                    actions: Some(vec![serde_json::json!({})]),
+                    value_balance_zat: Some(-300_000_000),
                 })
             } else {
                 None
@@ -1045,8 +1184,8 @@ mod tests {
 
     #[test]
     fn test_detect_coinbase() {
-        let tx = make_test_tx(false, false, false, false, false, false, true);
-        let (pool, is_cb, _, _, _, transfers, _, _, _) = detect_pools_and_values(&tx);
+        let tx = make_test_tx(false, false, false, false, false, false, false, true);
+        let (pool, is_cb, _, _, _, _, transfers, _, _, _, _) = detect_pools_and_values(&tx);
         assert_eq!(pool, "Coinbase");
         assert!(is_cb);
         assert_eq!(transfers, 0);
@@ -1054,8 +1193,8 @@ mod tests {
 
     #[test]
     fn test_detect_transparent() {
-        let tx = make_test_tx(true, true, false, false, false, false, false);
-        let (pool, is_cb, _, _, _, transfers, _, _, _) = detect_pools_and_values(&tx);
+        let tx = make_test_tx(true, true, false, false, false, false, false, false);
+        let (pool, is_cb, _, _, _, _, transfers, _, _, _, _) = detect_pools_and_values(&tx);
         assert_eq!(pool, "Transparent");
         assert!(!is_cb);
         assert_eq!(transfers, 1);
@@ -1063,62 +1202,78 @@ mod tests {
 
     #[test]
     fn test_detect_sapling_only() {
-        let tx = make_test_tx(false, false, false, true, true, false, false);
-        let (pool, _, _, _, _, transfers, _, _, _) = detect_pools_and_values(&tx);
+        let tx = make_test_tx(false, false, false, true, true, false, false, false);
+        let (pool, _, _, _, _, _, transfers, _, _, _, _) = detect_pools_and_values(&tx);
         assert_eq!(pool, "Sapling");
         assert_eq!(transfers, 1);
     }
 
     #[test]
     fn test_detect_orchard_only() {
-        let tx = make_test_tx(false, false, false, false, false, true, false);
-        let (pool, _, _, _, _, transfers, _, _, _) = detect_pools_and_values(&tx);
+        let tx = make_test_tx(false, false, false, false, false, true, false, false);
+        let (pool, _, _, _, _, _, transfers, _, _, _, _) = detect_pools_and_values(&tx);
         assert_eq!(pool, "Orchard");
         assert_eq!(transfers, 1);
     }
 
     #[test]
+    fn test_detect_ironwood_only() {
+        let tx = make_test_tx(false, false, false, false, false, false, true, false);
+        let (pool, _, _, _, _, _, transfers, _, _, _, _) = detect_pools_and_values(&tx);
+        assert_eq!(pool, "Ironwood");
+        assert_eq!(transfers, 1);
+    }
+
+    #[test]
     fn test_detect_mixed_t_s_o() {
-        let tx = make_test_tx(true, true, false, true, false, true, false);
-        let (pool, _, _, _, _, transfers, _, _, _) = detect_pools_and_values(&tx);
+        let tx = make_test_tx(true, true, false, true, false, true, false, false);
+        let (pool, _, _, _, _, _, transfers, _, _, _, _) = detect_pools_and_values(&tx);
         assert_eq!(pool, "Transparent,Sapling,Orchard");
         assert_eq!(transfers, 2);
     }
 
     #[test]
+    fn test_detect_mixed_with_ironwood() {
+        let tx = make_test_tx(true, true, false, false, false, false, true, false);
+        let (pool, _, _, _, _, _, transfers, _, _, _, _) = detect_pools_and_values(&tx);
+        assert_eq!(pool, "Transparent,Ironwood");
+        assert_eq!(transfers, 2);
+    }
+
+    #[test]
     fn test_detect_sprout() {
-        let tx = make_test_tx(false, false, true, false, false, false, false);
-        let (pool, _, _, _, _, _, _, _, _) = detect_pools_and_values(&tx);
+        let tx = make_test_tx(false, false, true, false, false, false, false, false);
+        let (pool, _, _, _, _, _, _, _, _, _, _) = detect_pools_and_values(&tx);
         assert_eq!(pool, "Sprout");
     }
 
     #[test]
     fn test_transfers_count() {
-        let tx = make_test_tx(true, false, false, false, true, true, false);
-        let (_, _, _, _, _, transfers, _, _, _) = detect_pools_and_values(&tx);
+        let tx = make_test_tx(true, false, false, false, true, true, false, false);
+        let (_, _, _, _, _, _, transfers, _, _, _, _) = detect_pools_and_values(&tx);
         assert_eq!(transfers, 3);
     }
 
     #[test]
     fn test_empty_tx() {
-        let tx = make_test_tx(false, false, false, false, false, false, false);
-        let (pool, _, _, _, _, transfers, _, _, _) = detect_pools_and_values(&tx);
+        let tx = make_test_tx(false, false, false, false, false, false, false, false);
+        let (pool, _, _, _, _, _, transfers, _, _, _, _) = detect_pools_and_values(&tx);
         assert_eq!(pool, "Unknown");
         assert_eq!(transfers, 0);
     }
 
     #[test]
     fn test_shielded_with_zero_value_vout() {
-        let mut tx = make_test_tx(false, false, false, true, true, false, false);
+        let mut tx = make_test_tx(false, false, false, true, true, false, false, false);
         tx.vout = vec![Vout { value_zat: 0 }];
-        let (pool, _, _, _, _, _, _, _, _) = detect_pools_and_values(&tx);
+        let (pool, _, _, _, _, _, _, _, _, _, _) = detect_pools_and_values(&tx);
         assert_eq!(pool, "Sapling");
     }
 
     #[test]
     fn test_coinbase_with_orchard() {
-        let tx = make_test_tx(true, false, false, false, false, true, true);
-        let (pool, is_cb, _, _, _, _, _, _, _) = detect_pools_and_values(&tx);
+        let tx = make_test_tx(true, false, false, false, false, true, false, true);
+        let (pool, is_cb, _, _, _, _, _, _, _, _, _) = detect_pools_and_values(&tx);
         assert_eq!(pool, "Coinbase");
         assert!(is_cb);
     }
@@ -1145,10 +1300,26 @@ mod tests {
         let txs = block_data["tx"].as_array().unwrap();
         assert_eq!(txs.len(), 1);
         let tx: RawTx = serde_json::from_value(txs[0].clone()).unwrap();
-        let (pool_type, _, _, _, _, transfers, _, _, _) = detect_pools_and_values(&tx);
+        let (pool_type, _, _, _, _, _, transfers, _, _, _, _) = detect_pools_and_values(&tx);
         assert_eq!(pool_type, "Transparent,Sapling,Orchard");
         assert_eq!(transfers, 3);
         assert_eq!(block_height, 3257342);
         assert_eq!(block_time, 1725123456);
+    }
+
+    #[test]
+    fn test_ironwood_json_parsing() {
+        let sample = r#"{
+            "txid": "iwtx",
+            "vin": [],
+            "vout": [],
+            "ironwood": {"actions": [{}, {}], "valueBalanceZat": -100000000}
+        }"#;
+        let tx: RawTx = serde_json::from_str(sample).unwrap();
+        let (pool, _, _, _, _, i, transfers, _, _, _, iw_count) = detect_pools_and_values(&tx);
+        assert_eq!(pool, "Ironwood");
+        assert_eq!(i, -100_000_000);
+        assert_eq!(transfers, 2);
+        assert_eq!(iw_count, 2);
     }
 }
