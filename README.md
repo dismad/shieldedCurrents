@@ -1,9 +1,10 @@
-
 # Shielded Currents
 
 A collection of Rust tools for analyzing Zcash shielded pool activity, transaction fees, supply history, and mempool data.
 
-These tools were originally developed inside the [ZecHub wiki](https://github.com/ZecHub/zechub-wiki) and have been extracted into their own repository for easier use and maintenance.
+These tools were originally developed inside the [ZecHub wiki](https://github.com/Zechub/zechub-wiki) and have been extracted into their own repository for easier use and maintenance.
+
+**Ironwood-ready (NU6.3)** as of 2026-07-23. Tracks Transparent / Sapling / Orchard / **Ironwood** pools.
 
 ## Tools
 
@@ -11,17 +12,19 @@ These tools were originally developed inside the [ZecHub wiki](https://github.co
 |-----------------------------|-----------------------------------------------------------------------------|
 | `zcash-block-fees`          | Analyze block-level fee data                                                |
 | `zcash-mempool-visualizer`  | Visualize / inspect current mempool state                                   |
-| `zcash-shielded-currents`   | Track inflows/outflows and current activity across Transparent / Sapling / Orchard pools |
+| `zcash-shielded-currents`   | Track inflows/outflows and current activity across Transparent / Sapling / Orchard / Ironwood pools |
 | `zcash-supply-history`      | Historical shielded supply tracking                                         |
 | `zcash-tx-fee`              | Transaction fee analysis                                                    |
 
 ## Prerequisites
 
 - Rust (stable)
-- A running [Zebra](https://github.com/ZcashFoundation/zebra) node with RPC enabled
+- A running [Zebra](https://github.com/ZcashFoundation/zebra) node **≥ 6.0.0** with RPC enabled
   (default: `http://127.0.0.1:8232`)
 
 Most tools expect to talk to a local Zebra instance. Double check cookie location. Fork and customize as needed <3.
+
+Ironwood (NU6.3) activates at height 3,428,143 (~2026-07-28). Ensure your Zebra is upgraded before then.
 
 ## Quick Start
 
@@ -77,6 +80,3 @@ cargo test
 ## License
 
 MIT OR Apache-2.0
-
----
-
