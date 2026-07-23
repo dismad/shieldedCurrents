@@ -69,7 +69,7 @@ struct Vout {
 }
 
 #[derive(Deserialize, Debug, Clone, Default)]
-struct Orchard {
+struct ShieldedPool {
     actions: Option<Vec<Value>>,
     #[serde(rename = "valueBalanceZat", default)]
     value_balance_zat: Option<i64>,
@@ -87,7 +87,9 @@ struct RawTx {
     v_shielded_spend: Option<Vec<Value>>,
     #[serde(rename = "vShieldedOutput", default)]
     v_shielded_output: Option<Vec<Value>>,
-    orchard: Option<Orchard>,
+    orchard: Option<ShieldedPool>,
+    #[serde(default)]
+    ironwood: Option<ShieldedPool>,
     #[serde(rename = "valueBalanceZat", default)]
     value_balance_zat: Option<i64>,
     #[serde(rename = "fee", default)]
@@ -106,6 +108,7 @@ struct TxClass {
     transparent_value: f64,
     sapling_value: f64,
     orchard_value: f64,
+    ironwood_value: f64,
     fee_rate: f64,
 }
 
@@ -552,7 +555,7 @@ async fn fetch_and_classify_mempool(
     let mut tx_classes: Vec<TxClass> = vec![];
     let mut total_fee_zec = 0.0;
     for tx in txs {
-        let (pool_type, is_coinbase, t_zat, s_zat, o_zat) = detect_pools(&tx);
+        let (pool_type, is_coinbase, t_zat, s_zat, o_zat, i_zat) = detect_pools(&tx);
         let transparent_value = t_zat as f64 / 100_000_000.0;
         let sapling_value = s_zat as f64 / 100_000_000.0;
         let orchard_value = o_zat as f64 / 100_000_000.0;
@@ -613,7 +616,7 @@ async fn fetch_and_classify_mempool(
     Ok((info, tx_classes, total_fee_zec))
 }
 
-fn detect_pools(tx: &RawTx) -> (String, bool, i64, i64, i64) {
+fn detect_pools(tx: &RawTx) -> (String, bool, i64, i64, i64, i64) {
     let is_coinbase = tx.vin.first().map_or(false, |v| v.coinbase.is_some());
     let mut pools = vec![];
     if !tx.vin.is_empty() || !tx.vout.is_empty() {
@@ -641,6 +644,14 @@ fn detect_pools(tx: &RawTx) -> (String, bool, i64, i64, i64) {
     {
         pools.push("Orchard".to_string());
     }
+    if tx
+        .ironwood
+        .as_ref()
+        .and_then(|o| o.actions.as_ref())
+        .map_or(false, |a| !a.is_empty())
+    {
+        pools.push("Ironwood".to_string());
+    }
     let pool_type = if pools.is_empty() {
         "Unknown".to_string()
     } else {
@@ -653,5 +664,10 @@ fn detect_pools(tx: &RawTx) -> (String, bool, i64, i64, i64) {
         .as_ref()
         .and_then(|or| or.value_balance_zat)
         .unwrap_or(0);
-    (pool_type, is_coinbase, t_zat, s_zat, o_zat)
+    let i_zat = tx
+        .ironwood
+        .as_ref()
+        .and_then(|iw| iw.value_balance_zat)
+        .unwrap_or(0);
+    (pool_type, is_coinbase, t_zat, s_zat, o_zat, i_zat)
 }
