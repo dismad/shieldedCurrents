@@ -559,6 +559,7 @@ async fn fetch_and_classify_mempool(
         let transparent_value = t_zat as f64 / 100_000_000.0;
         let sapling_value = s_zat as f64 / 100_000_000.0;
         let orchard_value = o_zat as f64 / 100_000_000.0;
+        let ironwood_value = i_zat as f64 / 100_000_000.0;
         let flow_type = if is_coinbase {
             "Coinbase (T)".to_string()
         } else if pool_type == "Transparent" {
@@ -610,6 +611,7 @@ async fn fetch_and_classify_mempool(
             transparent_value,
             sapling_value,
             orchard_value,
+            ironwood_value,
             fee_rate,
         });
     }
