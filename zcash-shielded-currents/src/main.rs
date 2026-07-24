@@ -776,7 +776,7 @@ async fn write_summary_md(
         (unknown as f64 / total * 100.0)
     );
     println!(" ────────────────────────────────────────────────");
-    println!(" TOTAL                         : {:>6} (100.00%)", total_txs);
+    println!(" TOTAL                           : {:>6} (100.00%)", total_txs);
     // ============================================================
     if sum == total_txs {
         println!("\nAll transactions perfectly categorized!");
