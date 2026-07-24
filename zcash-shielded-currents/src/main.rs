@@ -707,32 +707,32 @@ async fn write_summary_md(
         (pure_sprout as f64 / total * 100.0)
     );
     println!(
-        " Mixed Transparent+ Sapling      : {:>6} ({:.2}%)",
+        " Mixed Transparent + Sapling     : {:>6} ({:.2}%)",
         ts_mixed,
         (ts_mixed as f64 / total * 100.0)
     );
     println!(
-        " Mixed Transparent+ Orchard      : {:>6} ({:.2}%)",
+        " Mixed Transparent + Orchard     : {:>6} ({:.2}%)",
         to_mixed,
         (to_mixed as f64 / total * 100.0)
     );
     println!(
-        " Mixed Transparent+ Ironwood     : {:>6} ({:.2}%)",
+        " Mixed Transparent + Ironwood    : {:>6} ({:.2}%)",
         ti_mixed,
         (ti_mixed as f64 / total * 100.0)
     );
     println!(
-        " Mixed Sapling+ Orchard          : {:>6} ({:.2}%)",
+        " Mixed Sapling + Orchard         : {:>6} ({:.2}%)",
         so_mixed,
         (so_mixed as f64 / total * 100.0)
     );
     println!(
-        " Mixed Sapling+ Ironwood         : {:>6} ({:.2}%)",
+        " Mixed Sapling + Ironwood        : {:>6} ({:.2}%)",
         si_mixed,
         (si_mixed as f64 / total * 100.0)
     );
     println!(
-        " Mixed Orchard+ Ironwood         : {:>6} ({:.2}%)",
+        " Mixed Orchard + Ironwood        : {:>6} ({:.2}%)",
         oi_mixed,
         (oi_mixed as f64 / total * 100.0)
     );
@@ -1001,8 +1001,10 @@ I txs : {i_total} ( {i_pct:.2}% )
 I Inflows : {i_inflow:.8} ZEC
 I Outflows: {i_outflow:.8} ZEC
 I flow => : {i_flow:.8} ZEC
+
 {mixed_breakdown}
 {percentage_matrix}
+
 Total Chain supply: {total_chain:.8}
 Total Transparent supply: {transparent:.8}
 Total Sprout supply: {sprout:.8}
