@@ -926,7 +926,7 @@ async fn write_summary_md(
          Coinbase                        : {:>6} ({:.2}%)\n\
          Unknown                         : {:>6} ({:.2}%)\n\
          ────────────────────────────────────────────────\n\
-         TOTAL                         : {:>6} (100.00%)",
+         TOTAL                           : {:>6} (100.00%)",
         total_txs,
         pure_t,
         (pure_t as f64 / total * 100.0),
