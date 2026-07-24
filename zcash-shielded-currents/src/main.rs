@@ -12,7 +12,6 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::Semaphore;
-
 #[derive(Parser, Debug)]
 #[command(author, version, about, arg_required_else_help = true)]
 struct Args {
@@ -41,27 +40,23 @@ struct Args {
     #[arg(long, default_value_t = false)]
     verbose: bool,
 }
-
 #[derive(Deserialize, Debug, Clone, Default)]
 struct Vin {
     coinbase: Option<String>,
     txid: Option<String>,
     vout: Option<u32>,
 }
-
 #[derive(Deserialize, Debug, Clone, Default)]
 struct Vout {
     #[serde(rename = "valueZat", default)]
     value_zat: i64,
 }
-
 #[derive(Deserialize, Debug, Clone, Default)]
 struct ShieldedPool {
     actions: Option<Vec<Value>>,
     #[serde(rename = "valueBalanceZat", default)]
     value_balance_zat: Option<i64>,
 }
-
 #[derive(Deserialize, Debug, Clone, Default)]
 struct RawTx {
     #[serde(default)]
@@ -87,7 +82,6 @@ struct RawTx {
     #[serde(rename = "valueBalanceZat", default)]
     value_balance_zat: Option<i64>,
 }
-
 #[derive(Debug, Clone)]
 struct TxMetrics {
     block: u32,
@@ -107,7 +101,6 @@ struct TxMetrics {
     orchard_count: u32,
     ironwood_count: u32,
 }
-
 #[derive(Clone)]
 struct Rpc {
     client: reqwest::Client,
@@ -115,7 +108,6 @@ struct Rpc {
     prevout_cache: Arc<Mutex<HashMap<String, Vec<i64>>>>,
     auth: Option<(String, String)>,
 }
-
 impl Rpc {
     fn new(url: String, cookie_file: Option<String>) -> Result<Self> {
         let auth = if let Some(path) = cookie_file {
@@ -130,7 +122,6 @@ impl Rpc {
             auth,
         })
     }
-
     fn read_cookie(path: &str) -> Result<Option<(String, String)>> {
         let content =
             fs::read_to_string(path).context(format!("Cannot read cookie file: {}", path))?;
@@ -141,7 +132,6 @@ impl Rpc {
             anyhow::bail!("Invalid cookie format in {}", path)
         }
     }
-
     fn auto_detect_cookie() -> Result<Option<(String, String)>> {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
         let candidates = [
@@ -161,7 +151,6 @@ impl Rpc {
         println!("No cookie file found - running without auth");
         Ok(None)
     }
-
     async fn rpc<T: for<'de> Deserialize<'de>>(&self, method: &str, params: Value) -> Result<T> {
         let mut req = self.client.post(&self.url).json(&serde_json::json!({
             "jsonrpc": "2.0",
@@ -182,7 +171,6 @@ impl Rpc {
         }
         serde_json::from_value(result.clone()).context("deserialize failed")
     }
-
     async fn batch_get_raw_transactions(&self, txids: &[String]) -> Result<Vec<RawTx>> {
         if txids.is_empty() {
             return Ok(vec![]);
@@ -211,7 +199,6 @@ impl Rpc {
         }
         Ok(results)
     }
-
     async fn get_block(&self, height: u32) -> Result<Value> {
         if let Ok(block) = self.rpc("getblock", serde_json::json!([height, 2])).await {
             return Ok(block);
@@ -222,7 +209,6 @@ impl Rpc {
         self.rpc("getblock", serde_json::json!([hash, 2])).await
     }
 }
-
 fn detect_pools_and_values(
     tx: &RawTx,
 ) -> (String, bool, i64, i64, i64, i64, u32, u32, u32, u32, u32) {
@@ -307,7 +293,6 @@ fn detect_pools_and_values(
         ironwood_count,
     )
 }
-
 async fn process_block(
     rpc: Arc<Rpc>,
     height: u32,
@@ -464,7 +449,6 @@ async fn process_block(
     }
     res
 }
-
 #[tokio::main]
 async fn main() -> Result<()> {
     print!("Connecting to Zebrad now | ");
@@ -593,14 +577,12 @@ async fn main() -> Result<()> {
     println!("Completed in {:.2} seconds", elapsed.as_secs_f64());
     Ok(())
 }
-
 fn format_date(ts: u64) -> String {
     DateTime::<Utc>::from_timestamp(ts as i64, 0)
         .unwrap_or_default()
         .format("%c")
         .to_string()
 }
-
 fn write_myresults_md(metrics: &[TxMetrics], out: &Path) -> Result<()> {
     let mut f = File::create(out.join("myresults.md"))?;
     writeln!(
@@ -631,7 +613,6 @@ fn write_myresults_md(metrics: &[TxMetrics], out: &Path) -> Result<()> {
     }
     Ok(())
 }
-
 async fn write_summary_md(
     metrics: &[TxMetrics],
     start: u32,
@@ -798,16 +779,47 @@ async fn write_summary_md(
     let o_transfer: u32 = metrics.iter().map(|m| m.orchard_count).sum();
     let i_transfer: u32 = metrics.iter().map(|m| m.ironwood_count).sum();
     let total_transfer = t_transfer + s_transfer + o_transfer + i_transfer;
-    let t_tx_count = metrics
+
+    // Option B: any shielded involvement
+    // A tx counts as shielded if it has any Sapling/Orchard/Ironwood/Sprout activity.
+    // Pure transparent coinbases (no shielded value) do NOT count.
+    let any_shielded = metrics
         .iter()
-        .filter(|m| m.pool_type.contains("Transparent"))
+        .filter(|m| {
+            m.sapling != 0.0
+                || m.orchard != 0.0
+                || m.ironwood != 0.0
+                || m.pool_type.contains("Sprout")
+                || m.pool_type.contains("Sapling")
+                || m.pool_type.contains("Orchard")
+                || m.pool_type.contains("Ironwood")
+                || m.vshielded_count > 0
+                || m.orchard_count > 0
+                || m.ironwood_count > 0
+        })
         .count();
+
     let shielded_pct = if total_txs > 0 {
-        let ratio = 100.0 - ((t_tx_count as f64 / total_txs as f64) * 100.0);
-        (ratio * 100.0).round() / 100.0
+        ((any_shielded as f64 / total_txs as f64) * 10000.0).round() / 100.0
     } else {
         0.0
     };
+
+    // Keep a pure-transparent count for the "T txs" line (transparent-only or pure transparent coinbase)
+    let t_tx_count = metrics
+        .iter()
+        .filter(|m| {
+            m.pool_type == "Transparent"
+                || (m.is_coinbase
+                    && m.sapling == 0.0
+                    && m.orchard == 0.0
+                    && m.ironwood == 0.0
+                    && m.vshielded_count == 0
+                    && m.orchard_count == 0
+                    && m.ironwood_count == 0)
+        })
+        .count();
+
     let s_in = metrics.iter().filter(|m| m.sapling < 0.0).count();
     let s_out = metrics.iter().filter(|m| m.sapling > 0.0).count();
     let s_total = s_in + s_out;
@@ -960,7 +972,6 @@ async fn write_summary_md(
         (unknown as f64 / total * 100.0),
         total_txs
     );
-
     // Fixed: use a raw string to avoid the "multiple lines skipped by escaped newline" warnings
     let content = format!(
         r#"Between [{start}],[{end}]
@@ -990,7 +1001,6 @@ I txs : {i_total} ( {i_pct:.2}% )
 I Inflows : {i_inflow:.8} ZEC
 I Outflows: {i_outflow:.8} ZEC
 I flow => : {i_flow:.8} ZEC
-
 {mixed_breakdown}
 {percentage_matrix}
 Total Chain supply: {total_chain:.8}
@@ -1048,11 +1058,9 @@ Total Shielded supply: {total_shielded:.8}
         mixed_breakdown = mixed_breakdown,
         percentage_matrix = percentage_matrix
     );
-
     fs::write(out.join("summaryOnly.md"), content)?;
     Ok(())
 }
-
 fn write_pool_currents(metrics: &[TxMetrics], out: &Path) -> Result<()> {
     let mut out_t = File::create(out.join("myResultsOutT.md"))?;
     let mut in_s = File::create(out.join("myResultsInS.md"))?;
@@ -1102,11 +1110,9 @@ fn write_pool_currents(metrics: &[TxMetrics], out: &Path) -> Result<()> {
     }
     Ok(())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn make_test_tx(
         has_transparent_vout: bool,
         has_transparent_vin: bool,
@@ -1181,7 +1187,6 @@ mod tests {
             },
         }
     }
-
     #[test]
     fn test_detect_coinbase() {
         let tx = make_test_tx(false, false, false, false, false, false, false, true);
@@ -1190,7 +1195,6 @@ mod tests {
         assert!(is_cb);
         assert_eq!(transfers, 0);
     }
-
     #[test]
     fn test_detect_transparent() {
         let tx = make_test_tx(true, true, false, false, false, false, false, false);
@@ -1199,7 +1203,6 @@ mod tests {
         assert!(!is_cb);
         assert_eq!(transfers, 1);
     }
-
     #[test]
     fn test_detect_sapling_only() {
         let tx = make_test_tx(false, false, false, true, true, false, false, false);
@@ -1207,7 +1210,6 @@ mod tests {
         assert_eq!(pool, "Sapling");
         assert_eq!(transfers, 1);
     }
-
     #[test]
     fn test_detect_orchard_only() {
         let tx = make_test_tx(false, false, false, false, false, true, false, false);
@@ -1215,7 +1217,6 @@ mod tests {
         assert_eq!(pool, "Orchard");
         assert_eq!(transfers, 1);
     }
-
     #[test]
     fn test_detect_ironwood_only() {
         let tx = make_test_tx(false, false, false, false, false, false, true, false);
@@ -1223,7 +1224,6 @@ mod tests {
         assert_eq!(pool, "Ironwood");
         assert_eq!(transfers, 1);
     }
-
     #[test]
     fn test_detect_mixed_t_s_o() {
         let tx = make_test_tx(true, true, false, true, false, true, false, false);
@@ -1231,7 +1231,6 @@ mod tests {
         assert_eq!(pool, "Transparent,Sapling,Orchard");
         assert_eq!(transfers, 2);
     }
-
     #[test]
     fn test_detect_mixed_with_ironwood() {
         let tx = make_test_tx(true, true, false, false, false, false, true, false);
@@ -1239,21 +1238,18 @@ mod tests {
         assert_eq!(pool, "Transparent,Ironwood");
         assert_eq!(transfers, 2);
     }
-
     #[test]
     fn test_detect_sprout() {
         let tx = make_test_tx(false, false, true, false, false, false, false, false);
         let (pool, _, _, _, _, _, _, _, _, _, _) = detect_pools_and_values(&tx);
         assert_eq!(pool, "Sprout");
     }
-
     #[test]
     fn test_transfers_count() {
         let tx = make_test_tx(true, false, false, false, true, true, false, false);
         let (_, _, _, _, _, _, transfers, _, _, _, _) = detect_pools_and_values(&tx);
         assert_eq!(transfers, 3);
     }
-
     #[test]
     fn test_empty_tx() {
         let tx = make_test_tx(false, false, false, false, false, false, false, false);
@@ -1261,7 +1257,6 @@ mod tests {
         assert_eq!(pool, "Unknown");
         assert_eq!(transfers, 0);
     }
-
     #[test]
     fn test_shielded_with_zero_value_vout() {
         let mut tx = make_test_tx(false, false, false, true, true, false, false, false);
@@ -1269,7 +1264,6 @@ mod tests {
         let (pool, _, _, _, _, _, _, _, _, _, _) = detect_pools_and_values(&tx);
         assert_eq!(pool, "Sapling");
     }
-
     #[test]
     fn test_coinbase_with_orchard() {
         let tx = make_test_tx(true, false, false, false, false, true, false, true);
@@ -1277,7 +1271,6 @@ mod tests {
         assert_eq!(pool, "Coinbase");
         assert!(is_cb);
     }
-
     #[test]
     fn test_getblock_parsing() {
         let sample_json = r#"{
@@ -1306,7 +1299,6 @@ mod tests {
         assert_eq!(block_height, 3257342);
         assert_eq!(block_time, 1725123456);
     }
-
     #[test]
     fn test_ironwood_json_parsing() {
         let sample = r#"{
