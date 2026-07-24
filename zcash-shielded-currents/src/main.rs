@@ -915,12 +915,12 @@ async fn write_summary_md(
          Pure Orchard : {:>6} ({:.2}%)\n\
          Pure Ironwood : {:>6} ({:.2}%)\n\
          Pure Sprout : {:>6} ({:.2}%)\n\
-         Mixed Transparent+ Sapling : {:>6} ({:.2}%)\n\
-         Mixed Transparent+ Orchard : {:>6} ({:.2}%)\n\
-         Mixed Transparent+ Ironwood : {:>6} ({:.2}%)\n\
-         Mixed Sapling+ Orchard : {:>6} ({:.2}%)\n\
-         Mixed Sapling+ Ironwood : {:>6} ({:.2}%)\n\
-         Mixed Orchard+ Ironwood : {:>6} ({:.2}%)\n\
+         Mixed Transparent + Sapling : {:>6} ({:.2}%)\n\
+         Mixed Transparent + Orchard : {:>6} ({:.2}%)\n\
+         Mixed Transparent + Ironwood : {:>6} ({:.2}%)\n\
+         Mixed Sapling + Orchard : {:>6} ({:.2}%)\n\
+         Mixed Sapling + Ironwood : {:>6} ({:.2}%)\n\
+         Mixed Orchard + Ironwood : {:>6} ({:.2}%)\n\
          Mixed T+S+O : {:>6} ({:.2}%)\n\
          Other Mixed : {:>6} ({:.2}%)\n\
          Coinbase : {:>6} ({:.2}%)\n\
