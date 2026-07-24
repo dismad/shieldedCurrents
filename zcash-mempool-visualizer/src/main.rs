@@ -115,13 +115,45 @@ struct TxClass {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
-    let client = reqwest::Client::new();
+
+    // Build client with a short timeout so a wrong port / dead node fails fast
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()?;
     let rpc = Arc::new(client);
     let auth = if let Some(ref path) = args.cookie_file {
         read_cookie(path)?
     } else {
         auto_detect_cookie()?
     };
+
+    // Connectivity check BEFORE touching the terminal
+    // This prevents leaving the terminal in raw/alternate-screen state on failure
+    match get_block_height(&rpc, &auth, &args.rpc_url).await {
+        Ok(height) => {
+            eprintln!("Connected to Zebra at {} (height {})", args.rpc_url, height);
+        }
+        Err(e) => {
+            eprintln!("ERROR: cannot reach Zebra RPC at {}", args.rpc_url);
+            eprintln!("  {}", e);
+            eprintln!();
+            eprintln!("Common causes:");
+            eprintln!("  - Zebra is not running");
+            eprintln!("  - Wrong port (default is 8232)");
+            eprintln!("  - RPC not enabled or cookie mismatch");
+            eprintln!();
+            eprintln!("Try: curl -s --user \"$(cat ~/.cache/zebra/.cookie)\" \\");
+            eprintln!("       -d '{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getblockchaininfo\",\"params\":[]}}' \\");
+            eprintln!("       {}", args.rpc_url);
+            std::process::exit(1);
+        }
+    }
+
+    let start_height = get_block_height(&rpc, &auth, &args.rpc_url)
+        .await
+        .unwrap_or(0);
+
+    // Only enter TUI modes after we know the node is reachable
     let mut stdout = io::stdout();
     stdout.execute(EnterAlternateScreen)?;
     stdout.execute(EnableMouseCapture)?;
@@ -129,9 +161,6 @@ async fn main() -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
-    let start_height = get_block_height(&rpc, &auth, &args.rpc_url)
-        .await
-        .unwrap_or(0);
     let mut size_history: Vec<f64> = Vec::with_capacity(600);
     let mut fee_history: Vec<f64> = Vec::with_capacity(600);
     let mut historical_counts: BTreeMap<String, u32> = BTreeMap::new();
