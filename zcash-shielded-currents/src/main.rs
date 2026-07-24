@@ -539,7 +539,7 @@ async fn main() -> Result<()> {
     } else {
         let info: Value = rpc.rpc("getblockchaininfo", serde_json::json!([])).await?;
         let tip: u32 = info["blocks"].as_u64().context("no blocks field")? as u32;
-        let end = if tip > 1000 { tip - 1000 } else { tip };
+        let end = tip;
         let start = end.saturating_sub(args.last.saturating_sub(1));
         (start, end)
     };
