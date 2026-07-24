@@ -1005,15 +1005,15 @@ I flow => : {i_flow:.8} ZEC
 {mixed_breakdown}
 {percentage_matrix}
 
-Total Chain supply       : {total_chain:.8}
-Total Transparent supply : {transparent:.8}
-Total Sprout supply      : {sprout:.8}
-Total Sapling supply     : {sapling:.8}
-Total Orchard supply     : {orchard:.8}
-Total Ironwood supply    : {ironwood:.8}
-Total Lockbox supply     : {lockbox:.8}
+Total Chain supply          : {total_chain:.8}
+Total Transparent supply    : {transparent:.8}
+Total Sprout supply         : {sprout:.8}
+Total Sapling supply        : {sapling:.8}
+Total Orchard supply        : {orchard:.8}
+Total Ironwood supply       : {ironwood:.8}
+Total Lockbox supply        : {lockbox:.8}
 -------------------------------------------
-Total Shielded supply    : {total_shielded:.8}
+Total Shielded supply       : {total_shielded:.8}
 \_-ZECHUB-_/
 "#,
         start = start,
