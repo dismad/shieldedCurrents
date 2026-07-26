@@ -510,6 +510,7 @@ async fn main() -> Result<()> {
         write_myresults_md(&metrics, out_dir)?;
         write_summary_md(&metrics, height, height, out_dir, &rpc).await?;
         write_pool_currents(&metrics, out_dir)?;
+        write_all_combo_files(&metrics, out_dir)?;
         println!("Single-block output written to {}/", out_dir.display());
         let elapsed = start_time.elapsed();
         println!("Completed in {:.2} seconds", elapsed.as_secs_f64());
@@ -572,6 +573,7 @@ async fn main() -> Result<()> {
     write_myresults_md(&all_metrics, out_dir)?;
     write_summary_md(&all_metrics, start, end, out_dir, &rpc).await?;
     write_pool_currents(&all_metrics, out_dir)?;
+    write_all_combo_files(&all_metrics, out_dir)?;
     println!("All outputs written to {}/", out_dir.display());
     let elapsed = start_time.elapsed();
     println!("Completed in {:.2} seconds", elapsed.as_secs_f64());
@@ -635,47 +637,69 @@ async fn write_summary_md(
     let sum = pure_t + pure_s + pure_o + pure_i + pure_sprout + mixed_total + cb + unknown;
     println!("Pool verification: Pure T={} | S={} | O={} | I={} | Sprout={} | Mixed={} | CB={} | Unknown={} → Sum={} / Total={}",
         pure_t, pure_s, pure_o, pure_i, pure_sprout, mixed_total, cb, unknown, sum, total_txs);
-    // ==================== MIXED BREAKDOWN ====================
-    let ts_mixed = metrics
-        .iter()
-        .filter(|m| m.pool_type == "Transparent,Sapling")
-        .count();
-    let to_mixed = metrics
-        .iter()
-        .filter(|m| m.pool_type == "Transparent,Orchard")
-        .count();
-    let ti_mixed = metrics
-        .iter()
-        .filter(|m| m.pool_type == "Transparent,Ironwood")
-        .count();
-    let so_mixed = metrics
-        .iter()
-        .filter(|m| m.pool_type == "Sapling,Orchard")
-        .count();
-    let si_mixed = metrics
-        .iter()
-        .filter(|m| m.pool_type == "Sapling,Ironwood")
-        .count();
-    let oi_mixed = metrics
-        .iter()
-        .filter(|m| m.pool_type == "Orchard,Ironwood")
-        .count();
-    let tso_mixed = metrics
-        .iter()
-        .filter(|m| m.pool_type == "Transparent,Sapling,Orchard")
-        .count();
-    let other_mixed = mixed_total - ts_mixed - to_mixed - ti_mixed - so_mixed - si_mixed - oi_mixed - tso_mixed;
-    println!("\nMixed Transaction Breakdown:");
-    println!(" Transparent + Sapling           : {:>6}", ts_mixed);
-    println!(" Transparent + Orchard           : {:>6}", to_mixed);
-    println!(" Transparent + Ironwood          : {:>6}", ti_mixed);
-    println!(" Sapling + Orchard               : {:>6}", so_mixed);
-    println!(" Sapling + Ironwood              : {:>6}", si_mixed);
-    println!(" Orchard + Ironwood              : {:>6}", oi_mixed);
-    println!(" Transparent + Sapling + Orchard : {:>6}", tso_mixed);
-    println!(" Other mixed                     : {:>6}", other_mixed);
-    println!(" Total Mixed                     : {:>6}", mixed_total);
-    // ==================== NEW PERCENTAGE MATRIX ====================
+    // ==================== COMPLETE MIXED BREAKDOWN ====================
+    // Every possible multi-pool combination in detector order.
+    // Residual must stay 0.
+    let all_mixed_types: &[(&str, &str)] = &[
+        // 2-pool
+        ("Transparent,Sprout",                "Transparent + Sprout"),
+        ("Transparent,Sapling",               "Transparent + Sapling"),
+        ("Transparent,Orchard",               "Transparent + Orchard"),
+        ("Transparent,Ironwood",              "Transparent + Ironwood"),
+        ("Sprout,Sapling",                    "Sprout + Sapling"),
+        ("Sprout,Orchard",                    "Sprout + Orchard"),
+        ("Sprout,Ironwood",                   "Sprout + Ironwood"),
+        ("Sapling,Orchard",                   "Sapling + Orchard"),
+        ("Sapling,Ironwood",                  "Sapling + Ironwood"),
+        ("Orchard,Ironwood",                  "Orchard + Ironwood"),
+        // 3-pool
+        ("Transparent,Sprout,Sapling",        "T + Sprout + Sapling"),
+        ("Transparent,Sprout,Orchard",        "T + Sprout + Orchard"),
+        ("Transparent,Sprout,Ironwood",       "T + Sprout + Ironwood"),
+        ("Transparent,Sapling,Orchard",       "Transparent + Sapling + Orchard"),
+        ("Transparent,Sapling,Ironwood",      "T + Sapling + Ironwood"),
+        ("Transparent,Orchard,Ironwood",      "T + Orchard + Ironwood"),
+        ("Sprout,Sapling,Orchard",            "Sprout + Sapling + Orchard"),
+        ("Sprout,Sapling,Ironwood",           "Sprout + Sapling + Ironwood"),
+        ("Sprout,Orchard,Ironwood",           "Sprout + Orchard + Ironwood"),
+        ("Sapling,Orchard,Ironwood",          "Sapling + Orchard + Ironwood"),
+        // 4-pool
+        ("Transparent,Sprout,Sapling,Orchard","T + Sprout + S + O"),
+        ("Transparent,Sprout,Sapling,Ironwood","T + Sprout + S + I"),
+        ("Transparent,Sprout,Orchard,Ironwood","T + Sprout + O + I"),
+        ("Transparent,Sapling,Orchard,Ironwood","T + S + O + Ironwood"),
+        ("Sprout,Sapling,Orchard,Ironwood",   "Sprout + S + O + I"),
+        // 5-pool
+        ("Transparent,Sprout,Sapling,Orchard,Ironwood", "All five pools"),
+    ];
+
+    let mut mixed_counts: Vec<(&str, &str, usize)> = Vec::new();
+    let mut accounted = 0usize;
+    for &(key, label) in all_mixed_types {
+        let c = metrics.iter().filter(|m| m.pool_type == key).count();
+        mixed_counts.push((key, label, c));
+        accounted += c;
+    }
+    let residual_mixed = mixed_total.saturating_sub(accounted);
+
+    println!("\nComplete Mixed Transaction Breakdown:");
+    for &(_, label, c) in &mixed_counts {
+        println!(" {:<40} : {:>6}", label, c);
+    }
+    println!(" Residual (must be 0)                : {:>6}", residual_mixed);
+    println!(" Total Mixed                         : {:>6}", mixed_total);
+
+    // Convenience aliases for the rest of the function & markdown content
+    let ts_mixed  = mixed_counts.iter().find(|x| x.0 == "Transparent,Sapling").map(|x| x.2).unwrap_or(0);
+    let to_mixed  = mixed_counts.iter().find(|x| x.0 == "Transparent,Orchard").map(|x| x.2).unwrap_or(0);
+    let ti_mixed  = mixed_counts.iter().find(|x| x.0 == "Transparent,Ironwood").map(|x| x.2).unwrap_or(0);
+    let so_mixed  = mixed_counts.iter().find(|x| x.0 == "Sapling,Orchard").map(|x| x.2).unwrap_or(0);
+    let si_mixed  = mixed_counts.iter().find(|x| x.0 == "Sapling,Ironwood").map(|x| x.2).unwrap_or(0);
+    let oi_mixed  = mixed_counts.iter().find(|x| x.0 == "Orchard,Ironwood").map(|x| x.2).unwrap_or(0);
+    let tso_mixed = mixed_counts.iter().find(|x| x.0 == "Transparent,Sapling,Orchard").map(|x| x.2).unwrap_or(0);
+    let other_mixed = residual_mixed;
+
+    // ==================== PERCENTAGE MATRIX ====================
     let total = total_txs as f64;
     println!(
         "\nTransaction Type Percentages (of {} total transactions):",
@@ -683,90 +707,46 @@ async fn write_summary_md(
     );
     println!(
         " Pure Transparent                : {:>6} ({:.2}%)",
-        pure_t,
-        (pure_t as f64 / total * 100.0)
+        pure_t, (pure_t as f64 / total * 100.0)
     );
     println!(
         " Pure Sapling                    : {:>6} ({:.2}%)",
-        pure_s,
-        (pure_s as f64 / total * 100.0)
+        pure_s, (pure_s as f64 / total * 100.0)
     );
     println!(
         " Pure Orchard                    : {:>6} ({:.2}%)",
-        pure_o,
-        (pure_o as f64 / total * 100.0)
+        pure_o, (pure_o as f64 / total * 100.0)
     );
     println!(
         " Pure Ironwood                   : {:>6} ({:.2}%)",
-        pure_i,
-        (pure_i as f64 / total * 100.0)
+        pure_i, (pure_i as f64 / total * 100.0)
     );
     println!(
         " Pure Sprout                     : {:>6} ({:.2}%)",
-        pure_sprout,
-        (pure_sprout as f64 / total * 100.0)
+        pure_sprout, (pure_sprout as f64 / total * 100.0)
     );
-    println!(
-        " Mixed Transparent + Sapling     : {:>6} ({:.2}%)",
-        ts_mixed,
-        (ts_mixed as f64 / total * 100.0)
-    );
-    println!(
-        " Mixed Transparent + Orchard     : {:>6} ({:.2}%)",
-        to_mixed,
-        (to_mixed as f64 / total * 100.0)
-    );
-    println!(
-        " Mixed Transparent + Ironwood    : {:>6} ({:.2}%)",
-        ti_mixed,
-        (ti_mixed as f64 / total * 100.0)
-    );
-    println!(
-        " Mixed Sapling + Orchard         : {:>6} ({:.2}%)",
-        so_mixed,
-        (so_mixed as f64 / total * 100.0)
-    );
-    println!(
-        " Mixed Sapling + Ironwood        : {:>6} ({:.2}%)",
-        si_mixed,
-        (si_mixed as f64 / total * 100.0)
-    );
-    println!(
-        " Mixed Orchard + Ironwood        : {:>6} ({:.2}%)",
-        oi_mixed,
-        (oi_mixed as f64 / total * 100.0)
-    );
-    println!(
-        " Mixed T+S+O                     : {:>6} ({:.2}%)",
-        tso_mixed,
-        (tso_mixed as f64 / total * 100.0)
-    );
-    println!(
-        " Other Mixed                     : {:>6} ({:.2}%)",
-        other_mixed,
-        (other_mixed as f64 / total * 100.0)
-    );
+    for &(_, label, c) in &mixed_counts {
+        if c > 0 {
+            println!(" Mixed {:<33} : {:>6} ({:.2}%)", label, c, (c as f64 / total * 100.0));
+        }
+    }
+    if residual_mixed > 0 {
+        println!(
+            " Residual Mixed                  : {:>6} ({:.2}%)",
+            residual_mixed, (residual_mixed as f64 / total * 100.0)
+        );
+    }
     println!(
         " Coinbase                        : {:>6} ({:.2}%)",
-        cb,
-        (cb as f64 / total * 100.0)
+        cb, (cb as f64 / total * 100.0)
     );
     println!(
         " Unknown                         : {:>6} ({:.2}%)",
-        unknown,
-        (unknown as f64 / total * 100.0)
+        unknown, (unknown as f64 / total * 100.0)
     );
     println!(" ────────────────────────────────────────────────");
     println!(" TOTAL                           : {:>6} (100.00%)", total_txs);
     // ============================================================
-    if sum == total_txs {
-        println!("\nAll transactions perfectly categorized!");
-    } else {
-        println!(
-            "WARNING: Categories do not add up (difference = {})",
-            (sum as i64 - total_txs as i64)
-        );
-    }
     // (rest of the function unchanged - only the content string gets the matrix added)
     let coinbase_count = cb;
     let coinbase_pct = if total_txs > 0 {
@@ -1063,6 +1043,108 @@ Total Shielded supply       : {total_shielded:.8}
     fs::write(out.join("summaryOnly.md"), content)?;
     Ok(())
 }
+
+fn write_all_combo_files(metrics: &[TxMetrics], out: &Path) -> Result<()> {
+    let combo_dir = out.join("combos");
+    fs::create_dir_all(&combo_dir)?;
+
+    let pures: &[(&str, &str)] = &[
+        ("Transparent", "pure_Transparent.md"),
+        ("Sprout",      "pure_Sprout.md"),
+        ("Sapling",     "pure_Sapling.md"),
+        ("Orchard",     "pure_Orchard.md"),
+        ("Ironwood",    "pure_Ironwood.md"),
+        ("Coinbase",    "pure_Coinbase.md"),
+        ("Unknown",     "pure_Unknown.md"),
+    ];
+
+    let mixes: &[(&str, &str)] = &[
+        ("Transparent,Sprout",                "mixed_Transparent_Sprout.md"),
+        ("Transparent,Sapling",               "mixed_Transparent_Sapling.md"),
+        ("Transparent,Orchard",               "mixed_Transparent_Orchard.md"),
+        ("Transparent,Ironwood",              "mixed_Transparent_Ironwood.md"),
+        ("Sprout,Sapling",                    "mixed_Sprout_Sapling.md"),
+        ("Sprout,Orchard",                    "mixed_Sprout_Orchard.md"),
+        ("Sprout,Ironwood",                   "mixed_Sprout_Ironwood.md"),
+        ("Sapling,Orchard",                   "mixed_Sapling_Orchard.md"),
+        ("Sapling,Ironwood",                  "mixed_Sapling_Ironwood.md"),
+        ("Orchard,Ironwood",                  "mixed_Orchard_Ironwood.md"),
+        ("Transparent,Sprout,Sapling",        "mixed_T_Sprout_Sapling.md"),
+        ("Transparent,Sprout,Orchard",        "mixed_T_Sprout_Orchard.md"),
+        ("Transparent,Sprout,Ironwood",       "mixed_T_Sprout_Ironwood.md"),
+        ("Transparent,Sapling,Orchard",       "mixed_Transparent_Sapling_Orchard.md"),
+        ("Transparent,Sapling,Ironwood",      "mixed_T_Sapling_Ironwood.md"),
+        ("Transparent,Orchard,Ironwood",      "mixed_T_Orchard_Ironwood.md"),
+        ("Sprout,Sapling,Orchard",            "mixed_Sprout_Sapling_Orchard.md"),
+        ("Sprout,Sapling,Ironwood",           "mixed_Sprout_Sapling_Ironwood.md"),
+        ("Sprout,Orchard,Ironwood",           "mixed_Sprout_Orchard_Ironwood.md"),
+        ("Sapling,Orchard,Ironwood",          "mixed_Sapling_Orchard_Ironwood.md"),
+        ("Transparent,Sprout,Sapling,Orchard","mixed_T_Sprout_S_O.md"),
+        ("Transparent,Sprout,Sapling,Ironwood","mixed_T_Sprout_S_I.md"),
+        ("Transparent,Sprout,Orchard,Ironwood","mixed_T_Sprout_O_I.md"),
+        ("Transparent,Sapling,Orchard,Ironwood","mixed_T_S_O_Ironwood.md"),
+        ("Sprout,Sapling,Orchard,Ironwood",   "mixed_Sprout_S_O_I.md"),
+        ("Transparent,Sprout,Sapling,Orchard,Ironwood", "mixed_All_Five.md"),
+    ];
+
+    let header = "date | block | txid | transfers | fee | value_out | transparent | sapling | orchard | ironwood | pool_type | coinbase\n";
+
+    for &(pool, filename) in pures {
+        let mut f = File::create(combo_dir.join(filename))?;
+        f.write_all(header.as_bytes())?;
+        for m in metrics.iter().filter(|m| m.pool_type == pool) {
+            let date = format_date(m.time);
+            let line = format!(
+                "{} | {} | {} | {} | {:.8} | {:.8} | {:.8} | {:.8} | {:.8} | {:.8} | {} | {}\n",
+                date, m.block, m.txid, m.transfers, m.fee_zec, m.value_out,
+                m.transparent, m.sapling, m.orchard, m.ironwood, m.pool_type,
+                if m.is_coinbase { "IsCoinbase" } else { "" }
+            );
+            f.write_all(line.as_bytes())?;
+        }
+    }
+
+    for &(pool, filename) in mixes {
+        let mut f = File::create(combo_dir.join(filename))?;
+        f.write_all(header.as_bytes())?;
+        for m in metrics.iter().filter(|m| m.pool_type == pool) {
+            let date = format_date(m.time);
+            let line = format!(
+                "{} | {} | {} | {} | {:.8} | {:.8} | {:.8} | {:.8} | {:.8} | {:.8} | {} | {}\n",
+                date, m.block, m.txid, m.transfers, m.fee_zec, m.value_out,
+                m.transparent, m.sapling, m.orchard, m.ironwood, m.pool_type,
+                if m.is_coinbase { "IsCoinbase" } else { "" }
+            );
+            f.write_all(line.as_bytes())?;
+        }
+    }
+
+    // Residual catch-all (should stay empty)
+    let known: std::collections::HashSet<&str> = pures.iter().map(|x| x.0)
+        .chain(mixes.iter().map(|x| x.0))
+        .collect();
+    let mut residual = File::create(combo_dir.join("residual.md"))?;
+    residual.write_all(header.as_bytes())?;
+    let mut residual_count = 0usize;
+    for m in metrics {
+        if !known.contains(m.pool_type.as_str()) {
+            residual_count += 1;
+            let date = format_date(m.time);
+            let line = format!(
+                "{} | {} | {} | {} | {:.8} | {:.8} | {:.8} | {:.8} | {:.8} | {:.8} | {} | {}\n",
+                date, m.block, m.txid, m.transfers, m.fee_zec, m.value_out,
+                m.transparent, m.sapling, m.orchard, m.ironwood, m.pool_type,
+                if m.is_coinbase { "IsCoinbase" } else { "" }
+            );
+            residual.write_all(line.as_bytes())?;
+        }
+    }
+    if residual_count > 0 {
+        eprintln!("WARNING: {} transactions landed in residual.md – investigate new pool types", residual_count);
+    }
+    Ok(())
+}
+
 fn write_pool_currents(metrics: &[TxMetrics], out: &Path) -> Result<()> {
     let mut out_t = File::create(out.join("myResultsOutT.md"))?;
     let mut in_s = File::create(out.join("myResultsInS.md"))?;
