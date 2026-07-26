@@ -684,20 +684,10 @@ async fn write_summary_md(
 
     println!("\nComplete Mixed Transaction Breakdown:");
     for &(_, label, c) in &mixed_counts {
-        println!(" {:<36} : {:>6}", label, c);
+        println!(" {:<37} : {:>6}", label, c);
     }
-    println!(" {:<36} : {:>6}", "Residual (must be 0)", residual_mixed);
-    println!(" {:<36} : {:>6}", "Total Mixed", mixed_total);
-
-    // Convenience aliases for the rest of the function & markdown content
-    let ts_mixed  = mixed_counts.iter().find(|x| x.0 == "Transparent,Sapling").map(|x| x.2).unwrap_or(0);
-    let to_mixed  = mixed_counts.iter().find(|x| x.0 == "Transparent,Orchard").map(|x| x.2).unwrap_or(0);
-    let ti_mixed  = mixed_counts.iter().find(|x| x.0 == "Transparent,Ironwood").map(|x| x.2).unwrap_or(0);
-    let so_mixed  = mixed_counts.iter().find(|x| x.0 == "Sapling,Orchard").map(|x| x.2).unwrap_or(0);
-    let si_mixed  = mixed_counts.iter().find(|x| x.0 == "Sapling,Ironwood").map(|x| x.2).unwrap_or(0);
-    let oi_mixed  = mixed_counts.iter().find(|x| x.0 == "Orchard,Ironwood").map(|x| x.2).unwrap_or(0);
-    let tso_mixed = mixed_counts.iter().find(|x| x.0 == "Transparent,Sapling,Orchard").map(|x| x.2).unwrap_or(0);
-    let other_mixed = residual_mixed;
+    println!(" {:<37} : {:>6}", "Residual (must be 0)", residual_mixed);
+    println!(" {:<37} : {:>6}", "Total Mixed", mixed_total);
 
     // ==================== PERCENTAGE MATRIX ====================
     let total = total_txs as f64;
@@ -705,23 +695,23 @@ async fn write_summary_md(
         "\nTransaction Type Percentages (of {} total transactions):",
         total_txs
     );
-    println!(" {:<36} : {:>6} ({:.2}%)", "Pure Transparent", pure_t, (pure_t as f64 / total * 100.0));
-    println!(" {:<36} : {:>6} ({:.2}%)", "Pure Sapling", pure_s, (pure_s as f64 / total * 100.0));
-    println!(" {:<36} : {:>6} ({:.2}%)", "Pure Orchard", pure_o, (pure_o as f64 / total * 100.0));
-    println!(" {:<36} : {:>6} ({:.2}%)", "Pure Ironwood", pure_i, (pure_i as f64 / total * 100.0));
-    println!(" {:<36} : {:>6} ({:.2}%)", "Pure Sprout", pure_sprout, (pure_sprout as f64 / total * 100.0));
+    println!(" {:<37} : {:>6} ({:.2}%)", "Pure Transparent", pure_t, (pure_t as f64 / total * 100.0));
+    println!(" {:<37} : {:>6} ({:.2}%)", "Pure Sapling", pure_s, (pure_s as f64 / total * 100.0));
+    println!(" {:<37} : {:>6} ({:.2}%)", "Pure Orchard", pure_o, (pure_o as f64 / total * 100.0));
+    println!(" {:<37} : {:>6} ({:.2}%)", "Pure Ironwood", pure_i, (pure_i as f64 / total * 100.0));
+    println!(" {:<37} : {:>6} ({:.2}%)", "Pure Sprout", pure_sprout, (pure_sprout as f64 / total * 100.0));
     for &(_, label, c) in &mixed_counts {
         if c > 0 {
-            println!(" {:<36} : {:>6} ({:.2}%)", format!("Mixed {}", label), c, (c as f64 / total * 100.0));
+            println!(" {:<37} : {:>6} ({:.2}%)", format!("Mixed {}", label), c, (c as f64 / total * 100.0));
         }
     }
     if residual_mixed > 0 {
-        println!(" {:<36} : {:>6} ({:.2}%)", "Residual Mixed", residual_mixed, (residual_mixed as f64 / total * 100.0));
+        println!(" {:<37} : {:>6} ({:.2}%)", "Residual Mixed", residual_mixed, (residual_mixed as f64 / total * 100.0));
     }
-    println!(" {:<36} : {:>6} ({:.2}%)", "Coinbase", cb, (cb as f64 / total * 100.0));
-    println!(" {:<36} : {:>6} ({:.2}%)", "Unknown", unknown, (unknown as f64 / total * 100.0));
+    println!(" {:<37} : {:>6} ({:.2}%)", "Coinbase", cb, (cb as f64 / total * 100.0));
+    println!(" {:<37} : {:>6} ({:.2}%)", "Unknown", unknown, (unknown as f64 / total * 100.0));
     println!(" {}", "─".repeat(55));
-    println!(" {:<36} : {:>6} (100.00%)", "TOTAL", total_txs);
+    println!(" {:<37} : {:>6} (100.00%)", "TOTAL", total_txs);
     // ============================================================
     // (rest of the function unchanged - only the content string gets the matrix added)
     let coinbase_count = cb;
@@ -865,31 +855,31 @@ async fn write_summary_md(
     let total_shielded = sprout + sapling + orchard + ironwood + lockbox;
     let mut mixed_breakdown = String::from("Complete Mixed Transaction Breakdown:\n");
     for &(_, label, c) in &mixed_counts {
-        mixed_breakdown.push_str(&format!(" {:<36} : {:>6}\n", label, c));
+        mixed_breakdown.push_str(&format!(" {:<37} : {:>6}\n", label, c));
     }
-    mixed_breakdown.push_str(&format!(" {:<36} : {:>6}\n", "Residual (must be 0)", residual_mixed));
-    mixed_breakdown.push_str(&format!(" {:<36} : {:>6}\n", "Total Mixed", mixed_total));
+    mixed_breakdown.push_str(&format!(" {:<37} : {:>6}\n", "Residual (must be 0)", residual_mixed));
+    mixed_breakdown.push_str(&format!(" {:<37} : {:>6}\n", "Total Mixed", mixed_total));
     let mut percentage_matrix = format!(
         "Transaction Type Percentages (of {} total transactions):\n",
         total_txs
     );
-    percentage_matrix.push_str(&format!(" {:<36} : {:>6} ({:.2}%)\n", "Pure Transparent", pure_t, (pure_t as f64 / total * 100.0)));
-    percentage_matrix.push_str(&format!(" {:<36} : {:>6} ({:.2}%)\n", "Pure Sapling", pure_s, (pure_s as f64 / total * 100.0)));
-    percentage_matrix.push_str(&format!(" {:<36} : {:>6} ({:.2}%)\n", "Pure Orchard", pure_o, (pure_o as f64 / total * 100.0)));
-    percentage_matrix.push_str(&format!(" {:<36} : {:>6} ({:.2}%)\n", "Pure Ironwood", pure_i, (pure_i as f64 / total * 100.0)));
-    percentage_matrix.push_str(&format!(" {:<36} : {:>6} ({:.2}%)\n", "Pure Sprout", pure_sprout, (pure_sprout as f64 / total * 100.0)));
+    percentage_matrix.push_str(&format!(" {:<37} : {:>6} ({:.2}%)\n", "Pure Transparent", pure_t, (pure_t as f64 / total * 100.0)));
+    percentage_matrix.push_str(&format!(" {:<37} : {:>6} ({:.2}%)\n", "Pure Sapling", pure_s, (pure_s as f64 / total * 100.0)));
+    percentage_matrix.push_str(&format!(" {:<37} : {:>6} ({:.2}%)\n", "Pure Orchard", pure_o, (pure_o as f64 / total * 100.0)));
+    percentage_matrix.push_str(&format!(" {:<37} : {:>6} ({:.2}%)\n", "Pure Ironwood", pure_i, (pure_i as f64 / total * 100.0)));
+    percentage_matrix.push_str(&format!(" {:<37} : {:>6} ({:.2}%)\n", "Pure Sprout", pure_sprout, (pure_sprout as f64 / total * 100.0)));
     for &(_, label, c) in &mixed_counts {
         if c > 0 {
-            percentage_matrix.push_str(&format!(" {:<36} : {:>6} ({:.2}%)\n", format!("Mixed {}", label), c, (c as f64 / total * 100.0)));
+            percentage_matrix.push_str(&format!(" {:<37} : {:>6} ({:.2}%)\n", format!("Mixed {}", label), c, (c as f64 / total * 100.0)));
         }
     }
     if residual_mixed > 0 {
-        percentage_matrix.push_str(&format!(" {:<36} : {:>6} ({:.2}%)\n", "Residual Mixed", residual_mixed, (residual_mixed as f64 / total * 100.0)));
+        percentage_matrix.push_str(&format!(" {:<37} : {:>6} ({:.2}%)\n", "Residual Mixed", residual_mixed, (residual_mixed as f64 / total * 100.0)));
     }
-    percentage_matrix.push_str(&format!(" {:<36} : {:>6} ({:.2}%)\n", "Coinbase", cb, (cb as f64 / total * 100.0)));
-    percentage_matrix.push_str(&format!(" {:<36} : {:>6} ({:.2}%)\n", "Unknown", unknown, (unknown as f64 / total * 100.0)));
+    percentage_matrix.push_str(&format!(" {:<37} : {:>6} ({:.2}%)\n", "Coinbase", cb, (cb as f64 / total * 100.0)));
+    percentage_matrix.push_str(&format!(" {:<37} : {:>6} ({:.2}%)\n", "Unknown", unknown, (unknown as f64 / total * 100.0)));
     percentage_matrix.push_str(&format!(" {}\n", "─".repeat(55)));
-    percentage_matrix.push_str(&format!(" {:<36} : {:>6} (100.00%)", "TOTAL", total_txs));
+    percentage_matrix.push_str(&format!(" {:<37} : {:>6} (100.00%)", "TOTAL", total_txs));
     // Fixed: use a raw string to avoid the "multiple lines skipped by escaped newline" warnings
     let content = format!(
         r#"Between [{start}],[{end}]
