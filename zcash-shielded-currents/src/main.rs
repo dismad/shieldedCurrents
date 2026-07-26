@@ -684,10 +684,10 @@ async fn write_summary_md(
 
     println!("\nComplete Mixed Transaction Breakdown:");
     for &(_, label, c) in &mixed_counts {
-        println!(" {:<40} : {:>6}", label, c);
+        println!(" {:<36} : {:>6}", label, c);
     }
-    println!(" Residual (must be 0)                : {:>6}", residual_mixed);
-    println!(" Total Mixed                         : {:>6}", mixed_total);
+    println!(" {:<36} : {:>6}", "Residual (must be 0)", residual_mixed);
+    println!(" {:<36} : {:>6}", "Total Mixed", mixed_total);
 
     // Convenience aliases for the rest of the function & markdown content
     let ts_mixed  = mixed_counts.iter().find(|x| x.0 == "Transparent,Sapling").map(|x| x.2).unwrap_or(0);
@@ -705,47 +705,23 @@ async fn write_summary_md(
         "\nTransaction Type Percentages (of {} total transactions):",
         total_txs
     );
-    println!(
-        " Pure Transparent                : {:>6} ({:.2}%)",
-        pure_t, (pure_t as f64 / total * 100.0)
-    );
-    println!(
-        " Pure Sapling                    : {:>6} ({:.2}%)",
-        pure_s, (pure_s as f64 / total * 100.0)
-    );
-    println!(
-        " Pure Orchard                    : {:>6} ({:.2}%)",
-        pure_o, (pure_o as f64 / total * 100.0)
-    );
-    println!(
-        " Pure Ironwood                   : {:>6} ({:.2}%)",
-        pure_i, (pure_i as f64 / total * 100.0)
-    );
-    println!(
-        " Pure Sprout                     : {:>6} ({:.2}%)",
-        pure_sprout, (pure_sprout as f64 / total * 100.0)
-    );
+    println!(" {:<36} : {:>6} ({:.2}%)", "Pure Transparent", pure_t, (pure_t as f64 / total * 100.0));
+    println!(" {:<36} : {:>6} ({:.2}%)", "Pure Sapling", pure_s, (pure_s as f64 / total * 100.0));
+    println!(" {:<36} : {:>6} ({:.2}%)", "Pure Orchard", pure_o, (pure_o as f64 / total * 100.0));
+    println!(" {:<36} : {:>6} ({:.2}%)", "Pure Ironwood", pure_i, (pure_i as f64 / total * 100.0));
+    println!(" {:<36} : {:>6} ({:.2}%)", "Pure Sprout", pure_sprout, (pure_sprout as f64 / total * 100.0));
     for &(_, label, c) in &mixed_counts {
         if c > 0 {
-            println!(" Mixed {:<33} : {:>6} ({:.2}%)", label, c, (c as f64 / total * 100.0));
+            println!(" {:<36} : {:>6} ({:.2}%)", format!("Mixed {}", label), c, (c as f64 / total * 100.0));
         }
     }
     if residual_mixed > 0 {
-        println!(
-            " Residual Mixed                  : {:>6} ({:.2}%)",
-            residual_mixed, (residual_mixed as f64 / total * 100.0)
-        );
+        println!(" {:<36} : {:>6} ({:.2}%)", "Residual Mixed", residual_mixed, (residual_mixed as f64 / total * 100.0));
     }
-    println!(
-        " Coinbase                        : {:>6} ({:.2}%)",
-        cb, (cb as f64 / total * 100.0)
-    );
-    println!(
-        " Unknown                         : {:>6} ({:.2}%)",
-        unknown, (unknown as f64 / total * 100.0)
-    );
-    println!(" ────────────────────────────────────────────────");
-    println!(" TOTAL                           : {:>6} (100.00%)", total_txs);
+    println!(" {:<36} : {:>6} ({:.2}%)", "Coinbase", cb, (cb as f64 / total * 100.0));
+    println!(" {:<36} : {:>6} ({:.2}%)", "Unknown", unknown, (unknown as f64 / total * 100.0));
+    println!(" {}", "─".repeat(55));
+    println!(" {:<36} : {:>6} (100.00%)", "TOTAL", total_txs);
     // ============================================================
     // (rest of the function unchanged - only the content string gets the matrix added)
     let coinbase_count = cb;
@@ -887,71 +863,33 @@ async fn write_summary_md(
     }
     let total_chain = chain_supply;
     let total_shielded = sprout + sapling + orchard + ironwood + lockbox;
-    let mixed_breakdown = format!(
-        "Mixed Transaction Breakdown:\n\
-         Transparent + Sapling           : {:>6}\n\
-         Transparent + Orchard           : {:>6}\n\
-         Transparent + Ironwood          : {:>6}\n\
-         Sapling + Orchard               : {:>6}\n\
-         Sapling + Ironwood              : {:>6}\n\
-         Orchard + Ironwood              : {:>6}\n\
-         Transparent + Sapling + Orchard : {:>6}\n\
-         Other mixed                     : {:>6}\n\
-         Total Mixed                     : {:>6}\n",
-        ts_mixed, to_mixed, ti_mixed, so_mixed, si_mixed, oi_mixed, tso_mixed, other_mixed, mixed_total
-    );
-    let percentage_matrix = format!(
-        "Transaction Type Percentages (of {} total transactions):\n\
-         Pure Transparent                : {:>6} ({:.2}%)\n\
-         Pure Sapling                    : {:>6} ({:.2}%)\n\
-         Pure Orchard                    : {:>6} ({:.2}%)\n\
-         Pure Ironwood                   : {:>6} ({:.2}%)\n\
-         Pure Sprout                     : {:>6} ({:.2}%)\n\
-         Mixed Transparent+ Sapling      : {:>6} ({:.2}%)\n\
-         Mixed Transparent+ Orchard      : {:>6} ({:.2}%)\n\
-         Mixed Transparent+ Ironwood     : {:>6} ({:.2}%)\n\
-         Mixed Sapling+ Orchard          : {:>6} ({:.2}%)\n\
-         Mixed Sapling+ Ironwood         : {:>6} ({:.2}%)\n\
-         Mixed Orchard+ Ironwood         : {:>6} ({:.2}%)\n\
-         Mixed T+S+O                     : {:>6} ({:.2}%)\n\
-         Other Mixed                     : {:>6} ({:.2}%)\n\
-         Coinbase                        : {:>6} ({:.2}%)\n\
-         Unknown                         : {:>6} ({:.2}%)\n\
-         ────────────────────────────────────────────────\n\
-         TOTAL                           : {:>6} (100.00%)",
-        total_txs,
-        pure_t,
-        (pure_t as f64 / total * 100.0),
-        pure_s,
-        (pure_s as f64 / total * 100.0),
-        pure_o,
-        (pure_o as f64 / total * 100.0),
-        pure_i,
-        (pure_i as f64 / total * 100.0),
-        pure_sprout,
-        (pure_sprout as f64 / total * 100.0),
-        ts_mixed,
-        (ts_mixed as f64 / total * 100.0),
-        to_mixed,
-        (to_mixed as f64 / total * 100.0),
-        ti_mixed,
-        (ti_mixed as f64 / total * 100.0),
-        so_mixed,
-        (so_mixed as f64 / total * 100.0),
-        si_mixed,
-        (si_mixed as f64 / total * 100.0),
-        oi_mixed,
-        (oi_mixed as f64 / total * 100.0),
-        tso_mixed,
-        (tso_mixed as f64 / total * 100.0),
-        other_mixed,
-        (other_mixed as f64 / total * 100.0),
-        cb,
-        (cb as f64 / total * 100.0),
-        unknown,
-        (unknown as f64 / total * 100.0),
+    let mut mixed_breakdown = String::from("Complete Mixed Transaction Breakdown:\n");
+    for &(_, label, c) in &mixed_counts {
+        mixed_breakdown.push_str(&format!(" {:<36} : {:>6}\n", label, c));
+    }
+    mixed_breakdown.push_str(&format!(" {:<36} : {:>6}\n", "Residual (must be 0)", residual_mixed));
+    mixed_breakdown.push_str(&format!(" {:<36} : {:>6}\n", "Total Mixed", mixed_total));
+    let mut percentage_matrix = format!(
+        "Transaction Type Percentages (of {} total transactions):\n",
         total_txs
     );
+    percentage_matrix.push_str(&format!(" {:<36} : {:>6} ({:.2}%)\n", "Pure Transparent", pure_t, (pure_t as f64 / total * 100.0)));
+    percentage_matrix.push_str(&format!(" {:<36} : {:>6} ({:.2}%)\n", "Pure Sapling", pure_s, (pure_s as f64 / total * 100.0)));
+    percentage_matrix.push_str(&format!(" {:<36} : {:>6} ({:.2}%)\n", "Pure Orchard", pure_o, (pure_o as f64 / total * 100.0)));
+    percentage_matrix.push_str(&format!(" {:<36} : {:>6} ({:.2}%)\n", "Pure Ironwood", pure_i, (pure_i as f64 / total * 100.0)));
+    percentage_matrix.push_str(&format!(" {:<36} : {:>6} ({:.2}%)\n", "Pure Sprout", pure_sprout, (pure_sprout as f64 / total * 100.0)));
+    for &(_, label, c) in &mixed_counts {
+        if c > 0 {
+            percentage_matrix.push_str(&format!(" {:<36} : {:>6} ({:.2}%)\n", format!("Mixed {}", label), c, (c as f64 / total * 100.0)));
+        }
+    }
+    if residual_mixed > 0 {
+        percentage_matrix.push_str(&format!(" {:<36} : {:>6} ({:.2}%)\n", "Residual Mixed", residual_mixed, (residual_mixed as f64 / total * 100.0)));
+    }
+    percentage_matrix.push_str(&format!(" {:<36} : {:>6} ({:.2}%)\n", "Coinbase", cb, (cb as f64 / total * 100.0)));
+    percentage_matrix.push_str(&format!(" {:<36} : {:>6} ({:.2}%)\n", "Unknown", unknown, (unknown as f64 / total * 100.0)));
+    percentage_matrix.push_str(&format!(" {}\n", "─".repeat(55)));
+    percentage_matrix.push_str(&format!(" {:<36} : {:>6} (100.00%)", "TOTAL", total_txs));
     // Fixed: use a raw string to avoid the "multiple lines skipped by escaped newline" warnings
     let content = format!(
         r#"Between [{start}],[{end}]
@@ -985,15 +923,15 @@ I flow => : {i_flow:.8} ZEC
 {mixed_breakdown}
 {percentage_matrix}
 
-Total Chain supply          : {total_chain:.8}
-Total Transparent supply    : {transparent:.8}
-Total Sprout supply         : {sprout:.8}
-Total Sapling supply        : {sapling:.8}
-Total Orchard supply        : {orchard:.8}
-Total Ironwood supply       : {ironwood:.8}
-Total Lockbox supply        : {lockbox:.8}
--------------------------------------------
-Total Shielded supply       : {total_shielded:.8}
+Total Chain supply       : {total_chain:.8}
+Total Transparent supply : {transparent:.8}
+Total Sprout supply      : {sprout:.8}
+Total Sapling supply     : {sapling:.8}
+Total Orchard supply     : {orchard:.8}
+Total Ironwood supply    : {ironwood:.8}
+Total Lockbox supply     : {lockbox:.8}
+----------------------------------------
+Total Shielded supply    : {total_shielded:.8}
 \_-ZECHUB-_/
 "#,
         start = start,
