@@ -50,7 +50,6 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     let client = Arc::new(Client::new());
     let (user, pass) = get_credentials(&args)?;
-
     if let Some(file_path) = &args.file {
         let start = Instant::now();
         let stats = process_file(
@@ -64,11 +63,10 @@ async fn main() -> Result<()> {
             args.quiet,
         )
         .await?;
-
         let elapsed = start.elapsed().as_secs_f64();
         println!("\n=== Summary ===");
         println!("Processed : {} txids", stats.processed);
-        println!("Skipped   : {} lines", stats.skipped);
+        println!("Skipped : {} lines", stats.skipped);
         println!(
             "Total fee : {} Zats ({:.4} ZEC)",
             stats.total_fee,
@@ -76,12 +74,12 @@ async fn main() -> Result<()> {
         );
         if stats.processed > 0 {
             println!(
-                "Avg fee   : {:.0} Zats/tx",
+                "Avg fee : {:.0} Zats/tx",
                 stats.total_fee as f64 / stats.processed as f64
             );
         }
         println!(
-            "Time      : {:.2}s (~{:.0} tx/s)",
+            "Time : {:.2}s (~{:.0} tx/s)",
             elapsed,
             stats.processed as f64 / elapsed
         );
@@ -114,24 +112,19 @@ async fn process_file(
 ) -> Result<Stats> {
     let content =
         fs::read_to_string(path).with_context(|| format!("Failed to read {}", path.display()))?;
-
     let lines: Vec<String> = content.lines().map(|s| s.trim().to_string()).collect();
-
     let cache: Arc<DashMap<String, Value>> = Arc::new(DashMap::new());
     let semaphore = Arc::new(Semaphore::new(concurrency));
-
     let mut stats = Stats {
         processed: 0,
         skipped: 0,
         total_fee: 0,
     };
-
     let mut csv_writer = output_path.map(|p| {
         let mut w = csv::Writer::from_path(p).expect("failed to create CSV");
         w.write_record(["txid", "fee_zats", "fee_zec"]).unwrap();
         w
     });
-
     let tasks = futures::stream::iter(lines.into_iter().enumerate())
         .map(|(i, line)| {
             let client = client.clone();
@@ -140,19 +133,15 @@ async fn process_file(
             let user = user.to_string();
             let pass = pass.to_string();
             let url = url.to_string();
-
             async move {
                 if line.is_empty() || line.starts_with('#') {
                     return (i, None::<(String, i64)>, None::<String>);
                 }
-
                 let txid = match clean_txid(&line) {
                     Ok(t) => t,
                     Err(_) => return (i, None, Some(format!("invalid txid → {}", line))),
                 };
-
                 let _permit = semaphore.acquire().await.unwrap();
-
                 match calculate_fee_with_cache(&client, &url, &user, &pass, &txid, &cache).await {
                     Ok(fee) => (i, Some((txid, fee)), None),
                     Err(e) => (i, None, Some(format!("{} → {}", txid, e))),
@@ -160,10 +149,8 @@ async fn process_file(
             }
         })
         .buffer_unordered(concurrency);
-
     let mut results: Vec<_> = tasks.collect().await;
     results.sort_by_key(|(i, _, _)| *i);
-
     for (_, result, err_msg) in results {
         if let Some((txid, fee)) = result {
             if !quiet {
@@ -180,11 +167,9 @@ async fn process_file(
             stats.skipped += 1;
         }
     }
-
     if let Some(mut w) = csv_writer {
         w.flush().unwrap();
     }
-
     Ok(stats)
 }
 
@@ -197,7 +182,6 @@ fn clean_txid(raw: &str) -> Result<String> {
         .chars()
         .filter(|c| c.is_ascii_hexdigit())
         .collect();
-
     if cleaned.len() != 64 {
         anyhow::bail!("not 64 hex chars");
     }
@@ -218,11 +202,9 @@ fn get_credentials(args: &Args) -> Result<(String, String)> {
     if let (Some(u), Some(p)) = (&args.user, &args.pass) {
         return Ok((u.clone(), p.clone()));
     }
-
     if let Some(p) = &args.cookie_file {
         return read_cookie_file(p);
     }
-
     let home = dirs::home_dir().context("no home dir")?;
     let candidates = vec![
         home.join(".cache").join("zebra").join(".cookie"),
@@ -230,7 +212,6 @@ fn get_credentials(args: &Args) -> Result<(String, String)> {
         std::path::PathBuf::from(".cookie"),
         "/var/lib/zebrad-rpc/.cookie".to_string().into(),
     ];
-
     for p in candidates {
         if p.exists() {
             if let Ok(creds) = read_cookie_file(&p) {
@@ -263,12 +244,10 @@ async fn rpc_call(
         "method": method,
         "params": params,
     });
-
     let mut builder = client.post(url).json(&req);
     if !user.is_empty() {
         builder = builder.basic_auth(user, (!pass.is_empty()).then_some(pass));
     }
-
     let resp: Value = builder
         .send()
         .await
@@ -276,7 +255,6 @@ async fn rpc_call(
         .json()
         .await
         .context("RPC JSON parse failed")?;
-
     if let Some(err) = resp.get("error") {
         if !err.is_null() {
             anyhow::bail!("RPC error from node: {}", err);
@@ -303,7 +281,7 @@ async fn get_raw_tx(
     .await
 }
 
-// Updated fee calculation - now matches the more accurate logic from zcash-block-fees
+// Updated fee calculation - matches zcash-block-fees (includes Ironwood)
 async fn calculate_fee_with_cache(
     client: &Client,
     url: &str,
@@ -313,7 +291,6 @@ async fn calculate_fee_with_cache(
     cache: &DashMap<String, Value>,
 ) -> Result<i64> {
     let tx = get_raw_tx(client, url, user, pass, txid).await?;
-
     // Skip coinbase transactions
     if tx["vin"]
         .as_array()
@@ -323,7 +300,6 @@ async fn calculate_fee_with_cache(
     {
         return Ok(0);
     }
-
     let mut vin_sum: i64 = 0;
     if let Some(vins) = tx["vin"].as_array() {
         for vin in vins {
@@ -335,7 +311,6 @@ async fn calculate_fee_with_cache(
                     cache.insert(ptxid.to_string(), fetched.clone());
                     fetched
                 };
-
                 if let Some(vout_arr) = prev_tx["vout"].as_array() {
                     if let Some(vout) = vout_arr.get(idx as usize) {
                         if let Some(v) = vout["valueZat"].as_i64() {
@@ -346,12 +321,10 @@ async fn calculate_fee_with_cache(
             }
         }
     }
-
     let vout_sum: i64 = tx["vout"]
         .as_array()
         .map(|a| a.iter().filter_map(|v| v["valueZat"].as_i64()).sum())
         .unwrap_or(0);
-
     let mut vpub_old: i64 = 0;
     let mut vpub_new: i64 = 0;
     if let Some(js) = tx["vjoinsplit"].as_array() {
@@ -360,16 +333,17 @@ async fn calculate_fee_with_cache(
             vpub_new += j["vpub_newZat"].as_i64().unwrap_or(0);
         }
     }
-
     let sapling = tx["valueBalanceZat"].as_i64().unwrap_or(0);
     let orchard = tx["orchard"]
         .as_object()
         .and_then(|o| o["valueBalanceZat"].as_i64())
         .unwrap_or(0);
-
-    // Accurate fee formula from zcash-block-fees
-    let fee = vin_sum - vout_sum - vpub_old + vpub_new + sapling + orchard;
-
+    // Ironwood (NU6.3) value balance — required post-activation (height >= 3428143)
+    let ironwood = tx["ironwood"]
+        .as_object()
+        .and_then(|o| o["valueBalanceZat"].as_i64())
+        .unwrap_or(0);
+    let fee = vin_sum - vout_sum - vpub_old + vpub_new + sapling + orchard + ironwood;
     Ok(fee)
 }
 
