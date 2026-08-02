@@ -116,7 +116,6 @@ struct TxClass {
 async fn main() -> Result<()> {
     let args = Args::parse();
 
-    // Build client with a short timeout so a wrong port / dead node fails fast
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()?;
@@ -127,24 +126,22 @@ async fn main() -> Result<()> {
         auto_detect_cookie()?
     };
 
-    // Connectivity check BEFORE touching the terminal
-    // This prevents leaving the terminal in raw/alternate-screen state on failure
     match get_block_height(&rpc, &auth, &args.rpc_url).await {
         Ok(height) => {
             eprintln!("Connected to Zebra at {} (height {})", args.rpc_url, height);
         }
         Err(e) => {
             eprintln!("ERROR: cannot reach Zebra RPC at {}", args.rpc_url);
-            eprintln!("  {}", e);
+            eprintln!(" {}", e);
             eprintln!();
             eprintln!("Common causes:");
-            eprintln!("  - Zebra is not running");
-            eprintln!("  - Wrong port (default is 8232)");
-            eprintln!("  - RPC not enabled or cookie mismatch");
+            eprintln!(" - Zebra is not running");
+            eprintln!(" - Wrong port (default is 8232)");
+            eprintln!(" - RPC not enabled or cookie mismatch");
             eprintln!();
             eprintln!("Try: curl -s --user \"$(cat ~/.cache/zebra/.cookie)\" \\");
-            eprintln!("       -d '{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getblockchaininfo\",\"params\":[]}}' \\");
-            eprintln!("       {}", args.rpc_url);
+            eprintln!(" -d '{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getblockchaininfo\",\"params\":[]}}' \\");
+            eprintln!(" {}", args.rpc_url);
             std::process::exit(1);
         }
     }
@@ -153,7 +150,6 @@ async fn main() -> Result<()> {
         .await
         .unwrap_or(0);
 
-    // Only enter TUI modes after we know the node is reachable
     let mut stdout = io::stdout();
     stdout.execute(EnterAlternateScreen)?;
     stdout.execute(EnableMouseCapture)?;
@@ -161,6 +157,7 @@ async fn main() -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
+
     let mut size_history: Vec<f64> = Vec::with_capacity(600);
     let mut fee_history: Vec<f64> = Vec::with_capacity(600);
     let mut historical_counts: BTreeMap<String, u32> = BTreeMap::new();
@@ -176,6 +173,7 @@ async fn main() -> Result<()> {
     let mut table_state = TableState::default();
     let mut scrollbar_state = ScrollbarState::default();
     let mut table_top_y: u16 = 0;
+
     loop {
         if event::poll(Duration::from_millis(150))? {
             match event::read()? {
@@ -236,7 +234,6 @@ async fn main() -> Result<()> {
                                     if row < tx_classes.len() {
                                         table_state.select(Some(row));
                                         scrollbar_state = scrollbar_state.position(row);
-                                        // LEFT-CLICK = HIGHLIGHT + PRINT FULL TXID
                                         let txid = &tx_classes[row].txid;
                                         println!("\x1b[32m\n✅ FULL TXID:\x1b[0m {}", txid);
                                         println!(
@@ -268,10 +265,12 @@ async fn main() -> Result<()> {
                 _ => {}
             }
         }
+
         let now = Instant::now();
         let needs_main =
             now.duration_since(last_main) >= Duration::from_secs(current_main_interval);
         let needs_tx = now.duration_since(last_tx) >= Duration::from_secs(current_tx_interval);
+
         if needs_main || needs_tx || cached_info.is_none() {
             let (info, mut tx_classes, total_fee) =
                 fetch_and_classify_mempool(Arc::clone(&rpc), &args, &auth).await?;
@@ -283,6 +282,7 @@ async fn main() -> Result<()> {
             cached_info = Some(info);
             cached_tx_classes = Some(tx_classes);
             cached_total_fee = total_fee;
+
             let mut added = 0;
             for cls in cached_tx_classes.as_ref().unwrap() {
                 if seen_txids.insert(cls.txid.clone()) {
@@ -291,6 +291,7 @@ async fn main() -> Result<()> {
                 }
             }
             total_tx_seen += added;
+
             size_history.push(cached_info.as_ref().unwrap().size as f64);
             fee_history.push(total_fee * 1_000_000.0);
             if size_history.len() > 600 {
@@ -304,26 +305,45 @@ async fn main() -> Result<()> {
                 last_tx = now;
             }
         }
+
         terminal.draw(|f| {
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
                     Constraint::Length(4),
                     Constraint::Length(9),
-                    Constraint::Length(28), // ← even larger historical table
+                    Constraint::Length(28),
                     Constraint::Min(0),
                     Constraint::Length(9),
                     Constraint::Length(3),
                 ])
                 .split(f.area());
+
             let table_area = chunks[3];
             table_top_y = table_area.y;
+
             if let Some(info) = &cached_info {
-                let status = format!("Zebra Mempool • {} txs • {:.1} MB", info.size, info.bytes as f64 / 1_000_000.0);
-                f.render_widget(Paragraph::new(status).block(Block::default().title("Status").borders(Borders::ALL)), chunks[0]);
+                let status = format!(
+                    "Zebra Mempool • {} txs • {:.1} MB",
+                    info.size,
+                    info.bytes as f64 / 1_000_000.0
+                );
+                f.render_widget(
+                    Paragraph::new(status)
+                        .block(Block::default().title("Status").borders(Borders::ALL)),
+                    chunks[0],
+                );
             }
-            let tx_data: Vec<(f64, f64)> = size_history.iter().enumerate().map(|(i, &y)| (i as f64, y)).collect();
-            let tx_max = tx_data.iter().map(|&(_, y)| y).fold(f64::NEG_INFINITY, f64::max);
+
+            let tx_data: Vec<(f64, f64)> = size_history
+                .iter()
+                .enumerate()
+                .map(|(i, &y)| (i as f64, y))
+                .collect();
+            let tx_max = tx_data
+                .iter()
+                .map(|&(_, y)| y)
+                .fold(f64::NEG_INFINITY, f64::max);
             let tx_datasets = vec![Dataset::default()
                 .name("Tx Count")
                 .marker(Marker::Dot)
@@ -331,78 +351,165 @@ async fn main() -> Result<()> {
                 .style(Style::default().fg(Color::Cyan))
                 .data(&tx_data)];
             let tx_chart = Chart::new(tx_datasets)
-                .block(Block::default().title("Tx Count History (last ~100 min)").borders(Borders::ALL))
-                .x_axis(Axis::default()
-                    .title("Points")
-                    .style(Style::default().fg(Color::Gray))
-                    .bounds([0.0, (tx_data.len() as f64 - 1.0).max(0.0)])
-                    .labels(vec![Line::from("0"), Line::from(format!("{}", tx_data.len()))]))
-                .y_axis(Axis::default()
-                    .title("Transactions")
-                    .style(Style::default().fg(Color::Gray))
-                    .bounds([0.0, tx_max])
-                    .labels(vec![Line::from("0"), Line::from(format!("{:.0}", tx_max))]));
+                .block(
+                    Block::default()
+                        .title("Tx Count History (last ~100 min)")
+                        .borders(Borders::ALL),
+                )
+                .x_axis(
+                    Axis::default()
+                        .title("Points")
+                        .style(Style::default().fg(Color::Gray))
+                        .bounds([0.0, (tx_data.len() as f64 - 1.0).max(0.0)])
+                        .labels(vec![
+                            Line::from("0"),
+                            Line::from(format!("{}", tx_data.len())),
+                        ]),
+                )
+                .y_axis(
+                    Axis::default()
+                        .title("Transactions")
+                        .style(Style::default().fg(Color::Gray))
+                        .bounds([0.0, tx_max])
+                        .labels(vec![
+                            Line::from("0"),
+                            Line::from(format!("{:.0}", tx_max)),
+                        ]),
+                );
             f.render_widget(tx_chart, chunks[1]);
+
             if let Some(tx_classes) = &cached_tx_classes {
                 let split = Layout::default()
                     .direction(Direction::Horizontal)
                     .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
                     .split(chunks[2]);
+
                 let mut type_counts: BTreeMap<String, (u32, f64)> = BTreeMap::new();
                 for cls in tx_classes {
                     let e = type_counts.entry(cls.flow_type.clone()).or_insert((0, 0.0));
                     e.0 += 1;
-                    e.1 += cls.transparent_value.abs() + cls.sapling_value.abs() + cls.orchard_value.abs();
+                    e.1 += cls.transparent_value.abs()
+                        + cls.sapling_value.abs()
+                        + cls.orchard_value.abs()
+                        + cls.ironwood_value.abs();
                 }
-                let current_rows: Vec<Row> = type_counts.iter().map(|(t, (c, v))| {
-                    Row::new(vec![Cell::from(t.clone()), Cell::from(format!("{}", c)), Cell::from(format!("{:.2} ZEC", v))])
-                }).collect();
-                let current_table = Table::new(current_rows, [Constraint::Percentage(55), Constraint::Percentage(20), Constraint::Percentage(25)])
-                    .block(Block::default().title("Current").borders(Borders::ALL));
+                let current_rows: Vec<Row> = type_counts
+                    .iter()
+                    .map(|(t, (c, v))| {
+                        Row::new(vec![
+                            Cell::from(t.clone()),
+                            Cell::from(format!("{}", c)),
+                            Cell::from(format!("{:.2} ZEC", v)),
+                        ])
+                    })
+                    .collect();
+                let current_table = Table::new(
+                    current_rows,
+                    [
+                        Constraint::Percentage(55),
+                        Constraint::Percentage(20),
+                        Constraint::Percentage(25),
+                    ],
+                )
+                .block(Block::default().title("Current").borders(Borders::ALL));
                 f.render_widget(current_table, split[0]);
+
                 let total_hist = total_tx_seen as f64;
                 let transparent_count = *historical_counts.get("Transparent").unwrap_or(&0);
-                let transparent_pct = if total_hist > 0.0 { (transparent_count as f64 / total_hist) * 100.0 } else { 0.0 };
+                let transparent_pct = if total_hist > 0.0 {
+                    (transparent_count as f64 / total_hist) * 100.0
+                } else {
+                    0.0
+                };
                 let shielded_pct = 100.0 - transparent_pct;
+
                 let mut hist_rows: Vec<Row> = vec![
-                    Row::new(vec![Cell::from("Transparent"), Cell::from(format!("{:.1}%", transparent_pct))]),
-                    Row::new(vec![Cell::from("Total Shielded"), Cell::from(format!("{:.1}%", shielded_pct))]),
+                    Row::new(vec![
+                        Cell::from("Transparent"),
+                        Cell::from(format!("{:.1}%", transparent_pct)),
+                    ]),
+                    Row::new(vec![
+                        Cell::from("Total Shielded"),
+                        Cell::from(format!("{:.1}%", shielded_pct)),
+                    ]),
                     Row::new(vec![Cell::from(""), Cell::from("")]),
                 ];
                 for (typ, cnt) in historical_counts.iter().filter(|(t, _)| *t != "Transparent") {
-                    let pct = if total_hist > 0.0 { (*cnt as f64 / total_hist) * 100.0 } else { 0.0 };
-                    hist_rows.push(Row::new(vec![Cell::from(typ.clone()), Cell::from(format!("{:.1}%", pct))]));
+                    let pct = if total_hist > 0.0 {
+                        (*cnt as f64 / total_hist) * 100.0
+                    } else {
+                        0.0
+                    };
+                    hist_rows.push(Row::new(vec![
+                        Cell::from(typ.clone()),
+                        Cell::from(format!("{:.1}%", pct)),
+                    ]));
                 }
-                hist_rows.push(Row::new(vec![
-                    Cell::from("Total processed"),
-                    Cell::from(format!("{}", total_tx_seen)),
-                ]).style(Style::default().fg(Color::Gray).add_modifier(Modifier::BOLD)));
-                let hist_table = Table::new(hist_rows, [Constraint::Percentage(70), Constraint::Percentage(30)])
-                    .header(Row::new(vec!["Type", "Hist %"]).style(Style::default().fg(Color::Yellow)))
-                    .block(Block::default().title("Historical % since start").borders(Borders::ALL));
+                hist_rows.push(
+                    Row::new(vec![
+                        Cell::from("Total processed"),
+                        Cell::from(format!("{}", total_tx_seen)),
+                    ])
+                    .style(Style::default().fg(Color::Gray).add_modifier(Modifier::BOLD)),
+                );
+                let hist_table = Table::new(
+                    hist_rows,
+                    [Constraint::Percentage(70), Constraint::Percentage(30)],
+                )
+                .header(
+                    Row::new(vec!["Type", "Hist %"]).style(Style::default().fg(Color::Yellow)),
+                )
+                .block(
+                    Block::default()
+                        .title("Historical % since start")
+                        .borders(Borders::ALL),
+                );
                 f.render_widget(hist_table, split[1]);
             }
+
             if let Some(tx_classes) = &cached_tx_classes {
                 let table_area = chunks[3];
-                let rows: Vec<Row> = tx_classes.iter().enumerate().map(|(i, c)| {
-                    Row::new(vec![
-                        Cell::from(format!("{:02}", i + 1)),
-                        Cell::from(c.txid.clone()),
-                        Cell::from(format!("{:.3}", c.fee_rate)),
-                        Cell::from(format!("{:.4}", c.transparent_value)),
-                        Cell::from(format!("{:.4}", c.sapling_value)),
-                        Cell::from(format!("{:.4}", c.orchard_value)),
-                        Cell::from(c.flow_type.clone()),
-                    ])
-                }).collect();
+                let rows: Vec<Row> = tx_classes
+                    .iter()
+                    .enumerate()
+                    .map(|(i, c)| {
+                        Row::new(vec![
+                            Cell::from(format!("{:02}", i + 1)),
+                            Cell::from(c.txid.clone()),
+                            Cell::from(format!("{:.3}", c.fee_rate)),
+                            Cell::from(format!("{:.4}", c.transparent_value)),
+                            Cell::from(format!("{:.4}", c.sapling_value)),
+                            Cell::from(format!("{:.4}", c.orchard_value)),
+                            Cell::from(format!("{:.4}", c.ironwood_value)),
+                            Cell::from(c.flow_type.clone()),
+                        ])
+                    })
+                    .collect();
                 let table = Table::new(
                     rows,
-                    [Constraint::Length(4), Constraint::Length(68), Constraint::Length(8), Constraint::Length(10), Constraint::Length(10), Constraint::Length(10), Constraint::Percentage(30)],
+                    [
+                        Constraint::Length(4),
+                        Constraint::Length(64),
+                        Constraint::Length(8),
+                        Constraint::Length(9),
+                        Constraint::Length(9),
+                        Constraint::Length(9),
+                        Constraint::Length(9),
+                        Constraint::Percentage(25),
+                    ],
                 )
-                .header(Row::new(vec!["#", "TxID", "Fee", "T", "S", "O", "Type"]).style(Style::default().fg(Color::Yellow)))
-                .block(Block::default().title("Mempool Transactions (left-click any row)").borders(Borders::ALL))
+                .header(
+                    Row::new(vec!["#", "TxID", "Fee", "T", "S", "O", "I", "Type"])
+                        .style(Style::default().fg(Color::Yellow)),
+                )
+                .block(
+                    Block::default()
+                        .title("Mempool Transactions (left-click any row)")
+                        .borders(Borders::ALL),
+                )
                 .row_highlight_style(Style::default().bg(Color::DarkGray));
                 f.render_stateful_widget(table, table_area, &mut table_state);
+
                 let scrollbar_area = Rect {
                     x: table_area.x + table_area.width.saturating_sub(1),
                     y: table_area.y,
@@ -414,8 +521,16 @@ async fn main() -> Result<()> {
                     .end_symbol(Some("↓"));
                 f.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
             }
-            let fee_data: Vec<(f64, f64)> = fee_history.iter().enumerate().map(|(i, &y)| (i as f64, y)).collect();
-            let fee_max = fee_data.iter().map(|&(_, y)| y).fold(f64::NEG_INFINITY, f64::max);
+
+            let fee_data: Vec<(f64, f64)> = fee_history
+                .iter()
+                .enumerate()
+                .map(|(i, &y)| (i as f64, y))
+                .collect();
+            let fee_max = fee_data
+                .iter()
+                .map(|&(_, y)| y)
+                .fold(f64::NEG_INFINITY, f64::max);
             let fee_datasets = vec![Dataset::default()
                 .name("Fees (µZEC)")
                 .marker(Marker::Dot)
@@ -423,34 +538,59 @@ async fn main() -> Result<()> {
                 .style(Style::default().fg(Color::Green))
                 .data(&fee_data)];
             let fee_chart = Chart::new(fee_datasets)
-                .block(Block::default().title(format!("Total Mempool Fees History — Current: {:.8} ZEC", cached_total_fee)).borders(Borders::ALL))
-                .x_axis(Axis::default()
-                    .title("Points")
-                    .style(Style::default().fg(Color::Gray))
-                    .bounds([0.0, (fee_data.len() as f64 - 1.0).max(0.0)])
-                    .labels(vec![Line::from("0"), Line::from(format!("{}", fee_data.len()))]))
-                .y_axis(Axis::default()
-                    .title("µZEC")
-                    .style(Style::default().fg(Color::Gray))
-                    .bounds([0.0, fee_max])
-                    .labels(vec![Line::from("0"), Line::from(format!("{:.0}", fee_max))]));
+                .block(
+                    Block::default()
+                        .title(format!(
+                            "Total Mempool Fees History — Current: {:.8} ZEC",
+                            cached_total_fee
+                        ))
+                        .borders(Borders::ALL),
+                )
+                .x_axis(
+                    Axis::default()
+                        .title("Points")
+                        .style(Style::default().fg(Color::Gray))
+                        .bounds([0.0, (fee_data.len() as f64 - 1.0).max(0.0)])
+                        .labels(vec![
+                            Line::from("0"),
+                            Line::from(format!("{}", fee_data.len())),
+                        ]),
+                )
+                .y_axis(
+                    Axis::default()
+                        .title("µZEC")
+                        .style(Style::default().fg(Color::Gray))
+                        .bounds([0.0, fee_max])
+                        .labels(vec![
+                            Line::from("0"),
+                            Line::from(format!("{:.0}", fee_max)),
+                        ]),
+                );
             f.render_widget(fee_chart, chunks[4]);
+
             let footer = format!(
                 " q/Esc: Quit | r: Refresh | +/-: Main({}s) | T/t: TxTable({}s) | ↑↓/PgUp/PgDn/Home/End: Navigate | Left-click row = print txid",
                 current_main_interval, current_tx_interval
             );
-            f.render_widget(Paragraph::new(footer).style(Style::default().fg(Color::DarkGray)), chunks[5]);
+            f.render_widget(
+                Paragraph::new(footer).style(Style::default().fg(Color::DarkGray)),
+                chunks[5],
+            );
         })?;
+
         sleep(Duration::from_millis(50)).await;
     }
+
     disable_raw_mode()?;
     io::stdout().execute(DisableMouseCapture)?;
     io::stdout().execute(LeaveAlternateScreen)?;
     io::stdout().flush()?;
+
     let end_height = get_block_height(&rpc, &auth, &args.rpc_url)
         .await
         .unwrap_or(0);
     let blocks_processed = end_height.saturating_sub(start_height);
+
     let mut md = String::from("# Zebra Mempool Data Snapshot\n\n");
     md.push_str("## Historical Transaction Types (% since start)\n\n");
     md.push_str("| Type | Percentage |\n");
@@ -549,6 +689,7 @@ async fn fetch_and_classify_mempool(
     }
     let resp: Value = req.send().await?.json().await?;
     let info: MempoolInfo = serde_json::from_value(resp["result"].clone())?;
+
     let payload = json!({ "jsonrpc": "2.0", "method": "getrawmempool", "params": [true], "id": 2 });
     let mut req = rpc.post(&args.rpc_url).json(&payload);
     if let Some((user, pass)) = auth {
@@ -556,6 +697,7 @@ async fn fetch_and_classify_mempool(
     }
     let resp: Value = req.send().await?.json().await?;
     let mempool_entries: HashMap<String, Value> = serde_json::from_value(resp["result"].clone())?;
+
     let txids: Vec<String> = mempool_entries.keys().cloned().collect();
     let mut txs: Vec<RawTx> = vec![];
     for chunk in txids.chunks(args.batch_size) {
@@ -581,40 +723,65 @@ async fn fetch_and_classify_mempool(
             }
         }
     }
+
     let mut tx_classes: Vec<TxClass> = vec![];
     let mut total_fee_zec = 0.0;
+
     for tx in txs {
         let (pool_type, is_coinbase, t_zat, s_zat, o_zat, i_zat) = detect_pools(&tx);
+
         let transparent_value = t_zat as f64 / 100_000_000.0;
         let sapling_value = s_zat as f64 / 100_000_000.0;
         let orchard_value = o_zat as f64 / 100_000_000.0;
         let ironwood_value = i_zat as f64 / 100_000_000.0;
+
+        // Improved Ironwood-aware flow classification
         let flow_type = if is_coinbase {
             "Coinbase (T)".to_string()
         } else if pool_type == "Transparent" {
             "Transparent".to_string()
+        } else if pool_type == "Ironwood" {
+            "Private (i → i)".to_string()
+        } else if pool_type == "Orchard,Ironwood" || pool_type == "Ironwood,Orchard" {
+            // Typical migration pattern: Orchard spend + Ironwood output
+            if o_zat > 0 && i_zat < 0 {
+                "Migration: O → I".to_string()
+            } else if o_zat < 0 && i_zat > 0 {
+                "Migration: I → O".to_string()
+            } else {
+                "Private (o+i)".to_string()
+            }
         } else if !pool_type.contains("Transparent") {
             if pool_type == "Orchard" {
                 "Private (o → o)".to_string()
             } else if pool_type == "Sapling" {
                 "Private (s → s)".to_string()
+            } else if pool_type.contains("Ironwood") {
+                "Private (shielded+i)".to_string()
             } else {
                 "Private (s+o → s+o)".to_string()
             }
         } else if tx.v_joinsplit.as_ref().map_or(false, |v| !v.is_empty()) {
             "Sprout Mixed".to_string()
         } else {
-            match (s_zat.signum(), o_zat.signum()) {
-                (-1, 0) => "Shielding: T → S".to_string(),
-                (0, -1) => "Shielding: T → O".to_string(),
-                (-1, -1) => "Shielding: T → S+O".to_string(),
-                (1, 0) => "Deshielding: S → T".to_string(),
-                (0, 1) => "Deshielding: O → T".to_string(),
-                (1, 1) => "Deshielding: S+O → T".to_string(),
-                (1, -1) => "Deshielding: S → T + T → O".to_string(),
-                (-1, 1) => "Deshielding: O → T + T → S".to_string(),
+            // Mixed transparent + shielded (including Ironwood)
+            match (s_zat.signum(), o_zat.signum(), i_zat.signum()) {
+                (-1, 0, 0) => "Shielding: T → S".to_string(),
+                (0, -1, 0) => "Shielding: T → O".to_string(),
+                (0, 0, -1) => "Shielding: T → I".to_string(),
+                (-1, -1, 0) => "Shielding: T → S+O".to_string(),
+                (-1, 0, -1) => "Shielding: T → S+I".to_string(),
+                (0, -1, -1) => "Shielding: T → O+I".to_string(),
+                (-1, -1, -1) => "Shielding: T → S+O+I".to_string(),
+                (1, 0, 0) => "Deshielding: S → T".to_string(),
+                (0, 1, 0) => "Deshielding: O → T".to_string(),
+                (0, 0, 1) => "Deshielding: I → T".to_string(),
+                (1, 1, 0) => "Deshielding: S+O → T".to_string(),
+                (1, 0, 1) => "Deshielding: S+I → T".to_string(),
+                (0, 1, 1) => "Deshielding: O+I → T".to_string(),
+                (1, 1, 1) => "Deshielding: S+O+I → T".to_string(),
                 _ => {
-                    if s_zat == 0 && o_zat == 0 {
+                    if s_zat == 0 && o_zat == 0 && i_zat == 0 {
                         "Zero-net Shielded (z→z)".to_string()
                     } else {
                         format!("Complex Mixed [{}]", pool_type)
@@ -622,6 +789,7 @@ async fn fetch_and_classify_mempool(
                 }
             }
         };
+
         let entry = mempool_entries.get(&tx.txid).unwrap_or(&Value::Null);
         let vsize = entry["vsize"].as_u64().unwrap_or(tx.vsize.unwrap_or(1));
         let fee_zec = entry["fee"].as_f64().unwrap_or(0.0);
@@ -632,6 +800,7 @@ async fn fetch_and_classify_mempool(
         } else {
             0.0
         };
+
         tx_classes.push(TxClass {
             txid: tx.txid.clone(),
             pool_type,
@@ -644,12 +813,14 @@ async fn fetch_and_classify_mempool(
             fee_rate,
         });
     }
+
     Ok((info, tx_classes, total_fee_zec))
 }
 
 fn detect_pools(tx: &RawTx) -> (String, bool, i64, i64, i64, i64) {
     let is_coinbase = tx.vin.first().map_or(false, |v| v.coinbase.is_some());
     let mut pools = vec![];
+
     if !tx.vin.is_empty() || !tx.vout.is_empty() {
         pools.push("Transparent".to_string());
     }
@@ -683,11 +854,13 @@ fn detect_pools(tx: &RawTx) -> (String, bool, i64, i64, i64, i64) {
     {
         pools.push("Ironwood".to_string());
     }
+
     let pool_type = if pools.is_empty() {
         "Unknown".to_string()
     } else {
         pools.join(",")
     };
+
     let t_zat: i64 = tx.vout.iter().map(|v| v.value_zat).sum();
     let s_zat = tx.value_balance_zat.unwrap_or(0);
     let o_zat = tx
@@ -700,5 +873,6 @@ fn detect_pools(tx: &RawTx) -> (String, bool, i64, i64, i64, i64) {
         .as_ref()
         .and_then(|iw| iw.value_balance_zat)
         .unwrap_or(0);
+
     (pool_type, is_coinbase, t_zat, s_zat, o_zat, i_zat)
 }
