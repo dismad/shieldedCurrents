@@ -19,49 +19,34 @@ use std::time::{Duration, Instant};
 struct Args {
     #[arg(long)]
     block: Option<u32>,
-
     #[arg(long)]
     last: Option<u32>,
-
     #[arg(long)]
     from: Option<u32>,
-
     #[arg(long, help = "End height or 'tip' for current blockchain tip")]
     to: Option<String>,
-
     #[arg(long, default_value_t = 1)]
     step: u32,
-
     #[arg(short, long)]
     debug: bool,
-
     #[arg(short = 'q', long)]
     quiet: bool,
-
     #[arg(long)]
     output: Option<PathBuf>,
-
     #[arg(long)]
     graph: Option<PathBuf>,
-
     #[arg(long, default_value_t = 1920)]
     graph_width: u32,
-
     #[arg(long, default_value_t = 1080)]
     graph_height: u32,
-
     #[arg(long, default_value = "%m/%d/%Y")]
     date_format: String,
-
     #[arg(long)]
     user: Option<String>,
-
     #[arg(long)]
     pass: Option<String>,
-
     #[arg(long)]
     cookie_file: Option<PathBuf>,
-
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set,
           help = "Include transaction count (use --tx-count=false or --no-tx-count to disable)")]
     tx_count: bool,
@@ -79,16 +64,12 @@ struct BlockEntry {
 
 fn main() -> Result<()> {
     let mut args = Args::parse();
-
     let client = Client::builder()
         .timeout(Duration::from_secs(60))
         .pool_max_idle_per_host(8)
         .build()?;
-
     let (user, pass) = get_credentials(&args)?;
-
     let start = Instant::now();
-
     // Resolve --to tip
     let tip = get_block_count()?;
     if let Some(to_str) = &args.to {
@@ -96,13 +77,10 @@ fn main() -> Result<()> {
             args.to = Some(tip.to_string());
         }
     }
-
     let blocks = determine_blocks(&args)?;
-
     if blocks.is_empty() {
         anyhow::bail!("No blocks specified");
     }
-
     let (stats, failed_blocks) = process_blocks_safe(
         &client,
         "http://127.0.0.1:8232",
@@ -112,13 +90,10 @@ fn main() -> Result<()> {
         args.debug,
         args.quiet,
     )?;
-
     let elapsed = start.elapsed().as_secs_f64();
     let total_zats: i64 = stats.iter().map(|s| s.total_fee_zats).sum();
     let total_txs: u32 = stats.iter().map(|s| s.tx_count).sum();
-
     print_summary(stats.len(), total_zats, total_txs, elapsed, args.tx_count);
-
     let total_fallbacks: usize = stats.iter().map(|s| s.fallback_misses).sum();
     if total_fallbacks > 0 {
         println!(
@@ -127,22 +102,18 @@ fn main() -> Result<()> {
             total_fallbacks as f64 / stats.len() as f64
         );
     }
-
     if !failed_blocks.is_empty() {
         eprintln!("\nWARNING: {} blocks failed:", failed_blocks.len());
         for h in &failed_blocks {
-            eprintln!("  - Block {}", h);
+            eprintln!(" - Block {}", h);
         }
     }
-
     if let Some(path) = args.output {
         write_pretty_json(&path, &blocks, &stats, &args.date_format, args.tx_count)?;
     }
-
     if let Some(path) = args.graph {
         generate_graph(&blocks, &stats, &path, args.graph_width, args.graph_height)?;
     }
-
     Ok(())
 }
 
@@ -218,7 +189,6 @@ fn process_blocks_safe(
     } else {
         None
     };
-
     let results: Vec<(Option<BlockStats>, u32)> = blocks
         .par_iter()
         .with_max_len(3)
@@ -248,11 +218,9 @@ fn process_blocks_safe(
             },
         )
         .collect();
-
     if let Some(pb) = pb {
         pb.finish();
     }
-
     let mut stats = Vec::new();
     let mut failed = Vec::new();
     for (opt, h) in results {
@@ -283,13 +251,10 @@ fn calculate_block_fees(
         "getblock",
         vec![json!(hash_str), json!(2)],
     )?;
-
     let timestamp = block["time"].as_i64().unwrap_or(0);
     let txs = block["tx"].as_array().context("no tx array")?;
     let tx_count = txs.len() as u32;
-
     let mut local_cache: LruCache<String, Value> = LruCache::new(NonZeroUsize::new(300).unwrap());
-
     let mut missing_txids: HashSet<String> = HashSet::new();
     for tx in txs {
         let is_coinbase = tx["vin"]
@@ -300,7 +265,6 @@ fn calculate_block_fees(
         if is_coinbase {
             continue;
         }
-
         if let Some(vins) = tx["vin"].as_array() {
             for vin in vins {
                 if let Some(ptxid) = vin["txid"].as_str() {
@@ -312,7 +276,6 @@ fn calculate_block_fees(
             }
         }
     }
-
     if !missing_txids.is_empty() {
         if missing_txids.len() > 5000 {
             println!("⚠️ Very dense block {} ({} transactions but {} unique prev-txids) — using safe fallback mode (on-demand fetching)", height, tx_count, missing_txids.len());
@@ -335,10 +298,8 @@ fn calculate_block_fees(
             }
         }
     }
-
     let mut total = 0i64;
     let mut total_fallbacks = 0usize;
-
     for (i, tx) in txs.iter().enumerate() {
         let is_coinbase = tx["vin"]
             .as_array()
@@ -348,13 +309,11 @@ fn calculate_block_fees(
         if is_coinbase {
             continue;
         }
-
         let (fee, misses) =
             calculate_fee_from_tx(client, url, user, pass, tx, &mut local_cache, debug, i)?;
         total += fee;
         total_fallbacks += misses;
     }
-
     Ok((total, timestamp, total_fallbacks, tx_count))
 }
 
@@ -370,12 +329,10 @@ fn calculate_fee_from_tx(
 ) -> Result<(i64, usize)> {
     let mut vin_sum: i64 = 0;
     let mut fallback_count: usize = 0;
-
     if let Some(vins) = tx["vin"].as_array() {
         for vin in vins {
             if let (Some(ptxid), Some(idx)) = (vin["txid"].as_str(), vin["vout"].as_u64()) {
                 let ptxid_str = ptxid.to_string();
-
                 let prev_tx = if let Some(entry) = local_cache.get(&ptxid_str) {
                     entry.clone()
                 } else {
@@ -394,7 +351,6 @@ fn calculate_fee_from_tx(
                     fallback_count += 1;
                     fetched
                 };
-
                 if let Some(vout_arr) = prev_tx["vout"].as_array() {
                     if let Some(vout) = vout_arr.get(idx as usize) {
                         if let Some(v) = vout["valueZat"].as_i64() {
@@ -405,12 +361,10 @@ fn calculate_fee_from_tx(
             }
         }
     }
-
     let vout_sum: i64 = tx["vout"]
         .as_array()
         .map(|a| a.iter().filter_map(|v| v["valueZat"].as_i64()).sum())
         .unwrap_or(0);
-
     let mut vpub_old = 0i64;
     let mut vpub_new = 0i64;
     if let Some(js) = tx["vjoinsplit"].as_array() {
@@ -419,22 +373,23 @@ fn calculate_fee_from_tx(
             vpub_new += j["vpub_newZat"].as_i64().unwrap_or(0);
         }
     }
-
     let sapling = tx["valueBalanceZat"].as_i64().unwrap_or(0);
     let orchard = tx["orchard"]
         .as_object()
         .and_then(|o| o["valueBalanceZat"].as_i64())
         .unwrap_or(0);
-
-    let fee = vin_sum - vout_sum - vpub_old + vpub_new + sapling + orchard;
-
+    // Ironwood (NU6.3) value balance — required post-activation (height >= 3428143)
+    let ironwood = tx["ironwood"]
+        .as_object()
+        .and_then(|o| o["valueBalanceZat"].as_i64())
+        .unwrap_or(0);
+    let fee = vin_sum - vout_sum - vpub_old + vpub_new + sapling + orchard + ironwood;
     Ok((fee, fallback_count))
 }
 
 // ────────────────────────────────────────────────
 // Helper functions (unchanged)
 // ────────────────────────────────────────────────
-
 fn get_credentials(args: &Args) -> Result<(String, String)> {
     if let (Some(u), Some(p)) = (&args.user, &args.pass) {
         return Ok((u.clone(), p.clone()));
@@ -571,7 +526,6 @@ fn generate_graph(
         .zip(stats.iter().step_by(step))
         .map(|(&b, s)| (b, s.total_fee_zats as f64 / 1e8))
         .collect();
-
     let root = SVGBackend::new(path.to_str().unwrap(), (width, height)).into_drawing_area();
     root.fill(&WHITE)?;
     let max_fee = points
@@ -579,7 +533,6 @@ fn generate_graph(
         .map(|(_, f)| *f)
         .max_by(|a, b| a.partial_cmp(b).unwrap())
         .unwrap_or(0.0);
-
     let mut chart = ChartBuilder::on(&root)
         .caption("Zcash Block Fees Over Time", ("sans-serif", 30))
         .margin(10)
@@ -589,7 +542,6 @@ fn generate_graph(
             *blocks.first().unwrap_or(&0)..*blocks.last().unwrap_or(&0),
             0.0..(max_fee * 1.1),
         )?;
-
     chart
         .configure_mesh()
         .x_desc("Block Height")
@@ -609,11 +561,11 @@ fn print_summary(
     include_tx_count: bool,
 ) {
     println!("\n=== BLOCK FEES SUMMARY ===");
-    println!("Blocks processed   : {}", processed);
+    println!("Blocks processed : {}", processed);
     if include_tx_count {
         println!("Total transactions : {}", total_txs);
         println!(
-            "Avg txs per block  : {:.1}",
+            "Avg txs per block : {:.1}",
             if processed > 0 {
                 total_txs as f64 / processed as f64
             } else {
@@ -622,13 +574,13 @@ fn print_summary(
         );
     }
     println!(
-        "Total fees         : {} Zats ({:.4} ZEC)",
+        "Total fees : {} Zats ({:.4} ZEC)",
         total_zats,
         total_zats as f64 / 1e8
     );
-    println!("Time               : {:.2}s", elapsed);
+    println!("Time : {:.2}s", elapsed);
     println!(
-        "Avg fee per block  : {:.0} Zats",
+        "Avg fee per block : {:.0} Zats",
         if processed > 0 {
             total_zats as f64 / processed as f64
         } else {
