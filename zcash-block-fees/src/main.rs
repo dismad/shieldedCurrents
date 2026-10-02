@@ -14,6 +14,8 @@ use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+mod fee;
+
 #[derive(Parser, Debug)]
 #[command(author, version, about = "zcash-block-fees")]
 struct Args {
@@ -47,9 +49,29 @@ struct Args {
     pass: Option<String>,
     #[arg(long)]
     cookie_file: Option<PathBuf>,
+    #[arg(long, default_value = "http://127.0.0.1:8232")]
+    rpc: String,
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = FeeSource::Prevout,
+        help = "prevout (default) reads getblock verbosity 3 and requires zebrad >= 7.0.0-rc.0. legacy fetches inputs with getrawtransaction"
+    )]
+    fee_source: FeeSource,
+    #[arg(
+        long,
+        help = "Time the legacy getrawtransaction path and getblock verbosity 3 on the same heights"
+    )]
+    compare: bool,
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set,
           help = "Include transaction count (use --tx-count=false or --no-tx-count to disable)")]
     tx_count: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+enum FeeSource {
+    Legacy,
+    Prevout,
 }
 
 #[derive(Serialize)]
@@ -70,38 +92,41 @@ fn main() -> Result<()> {
         .build()?;
     let (user, pass) = get_credentials(&args)?;
     let start = Instant::now();
-    // Resolve --to tip
-    let tip = get_block_count()?;
+    let tip = get_block_count(&client, &args.rpc, &user, &pass)?;
     if let Some(to_str) = &args.to {
         if to_str.to_lowercase() == "tip" {
             args.to = Some(tip.to_string());
         }
     }
-    let blocks = determine_blocks(&args)?;
+    let blocks = determine_blocks(&args, tip)?;
     if blocks.is_empty() {
         anyhow::bail!("No blocks specified");
     }
+    if args.compare {
+        run_compare(&client, &args.rpc, &user, &pass, &blocks, args.debug, args.quiet)?;
+        return Ok(());
+    }
     let (stats, failed_blocks) = process_blocks_safe(
         &client,
-        "http://127.0.0.1:8232",
+        &args.rpc,
         &user,
         &pass,
         &blocks,
         args.debug,
         args.quiet,
+        args.fee_source,
     )?;
     let elapsed = start.elapsed().as_secs_f64();
     let total_zats: i64 = stats.iter().map(|s| s.total_fee_zats).sum();
     let total_txs: u32 = stats.iter().map(|s| s.tx_count).sum();
     print_summary(stats.len(), total_zats, total_txs, elapsed, args.tx_count);
+    println!("Fee source: {:?} (prevout requires zebrad >= 7.0.0-rc.0)", args.fee_source);
     let total_fallbacks: usize = stats.iter().map(|s| s.fallback_misses).sum();
-    if total_fallbacks > 0 {
-        println!(
-            "Cache misses during final calculation: {} (avg {:.2} per block)",
-            total_fallbacks,
-            total_fallbacks as f64 / stats.len() as f64
-        );
-    }
+    let label = match args.fee_source {
+        FeeSource::Legacy => "Unresolved inputs",
+        FeeSource::Prevout => "Transactions with a missing prevout",
+    };
+    println!("{}: {}", label, total_fallbacks);
     if !failed_blocks.is_empty() {
         eprintln!("\nWARNING: {} blocks failed:", failed_blocks.len());
         for h in &failed_blocks {
@@ -124,8 +149,7 @@ struct BlockStats {
     tx_count: u32,
 }
 
-fn determine_blocks(args: &Args) -> Result<Vec<u32>> {
-    let tip = get_block_count()?;
+fn determine_blocks(args: &Args, tip: u32) -> Result<Vec<u32>> {
     if let Some(h) = args.block {
         return Ok(vec![h]);
     }
@@ -157,18 +181,75 @@ fn determine_blocks(args: &Args) -> Result<Vec<u32>> {
     Ok(v)
 }
 
-fn get_block_count() -> Result<u32> {
-    let client = Client::new();
-    let (u, p) = get_credentials_from_env_or_cookie()?;
-    let res = rpc_call(
-        &client,
-        "http://127.0.0.1:8232",
-        &u,
-        &p,
-        "getblockcount",
-        vec![],
-    )?;
+fn get_block_count(client: &Client, url: &str, user: &str, pass: &str) -> Result<u32> {
+    let res = rpc_call(client, url, user, pass, "getblockcount", vec![])?;
     Ok(res.as_u64().context("invalid getblockcount")? as u32)
+}
+
+fn run_compare(
+    client: &Client,
+    url: &str,
+    user: &str,
+    pass: &str,
+    blocks: &[u32],
+    debug: bool,
+    quiet: bool,
+) -> Result<()> {
+    println!(
+        "Compare {} blocks. Legacy runs first, so verbosity 3 may benefit from a warm page cache.",
+        blocks.len()
+    );
+    let (legacy, legacy_failed, legacy_secs) =
+        timed(client, url, user, pass, blocks, debug, quiet, FeeSource::Legacy)?;
+    let (prevout, prevout_failed, prevout_secs) =
+        timed(client, url, user, pass, blocks, debug, quiet, FeeSource::Prevout)?;
+    let speedup = if prevout_secs > 0.0 {
+        legacy_secs / prevout_secs
+    } else {
+        0.0
+    };
+    let legacy_fees: i64 = legacy.iter().map(|s| s.total_fee_zats).sum();
+    let prevout_fees: i64 = prevout.iter().map(|s| s.total_fee_zats).sum();
+    let legacy_misses: usize = legacy.iter().map(|s| s.fallback_misses).sum();
+    let prevout_missing: usize = prevout.iter().map(|s| s.fallback_misses).sum();
+    println!("\n=== FEE PATH COMPARE ===");
+    println!(
+        "legacy   {:>8.2}s  blocks {}  failed {}  fee {} zat  input misses {}",
+        legacy_secs,
+        legacy.len(),
+        legacy_failed.len(),
+        legacy_fees,
+        legacy_misses
+    );
+    println!(
+        "prevout  {:>8.2}s  blocks {}  failed {}  fee {} zat  missing prevout txs {}",
+        prevout_secs,
+        prevout.len(),
+        prevout_failed.len(),
+        prevout_fees,
+        prevout_missing
+    );
+    println!("prevout / legacy time: {:.2}x", speedup);
+    println!("fee delta (prevout - legacy): {} zat", prevout_fees - legacy_fees);
+    if legacy_misses > 0 {
+        println!("legacy undercounts when an input fetch misses; delta is expected in that case");
+    }
+    Ok(())
+}
+
+fn timed(
+    client: &Client,
+    url: &str,
+    user: &str,
+    pass: &str,
+    blocks: &[u32],
+    debug: bool,
+    quiet: bool,
+    source: FeeSource,
+) -> Result<(Vec<BlockStats>, Vec<u32>, f64)> {
+    let start = Instant::now();
+    let (stats, failed) = process_blocks_safe(client, url, user, pass, blocks, debug, quiet, source)?;
+    Ok((stats, failed, start.elapsed().as_secs_f64()))
 }
 
 fn process_blocks_safe(
@@ -179,6 +260,7 @@ fn process_blocks_safe(
     blocks: &[u32],
     debug: bool,
     quiet: bool,
+    source: FeeSource,
 ) -> Result<(Vec<BlockStats>, Vec<u32>)> {
     let pb = if !quiet {
         let pb = ProgressBar::new(blocks.len() as u64);
@@ -192,8 +274,8 @@ fn process_blocks_safe(
     let results: Vec<(Option<BlockStats>, u32)> = blocks
         .par_iter()
         .with_max_len(3)
-        .map(
-            |&height| match calculate_block_fees(client, url, user, pass, height, debug) {
+        .map(|&height| {
+            match calculate_block_fees(client, url, user, pass, height, debug, source) {
                 Ok((total, timestamp, fallbacks, tx_count)) => {
                     if let Some(pb) = &pb {
                         pb.inc(1);
@@ -215,8 +297,8 @@ fn process_blocks_safe(
                     }
                     (None, height)
                 }
-            },
-        )
+            }
+        })
         .collect();
     if let Some(pb) = pb {
         pb.finish();
@@ -240,29 +322,40 @@ fn calculate_block_fees(
     pass: &str,
     height: u32,
     debug: bool,
+    source: FeeSource,
 ) -> Result<(i64, i64, usize, u32)> {
     let hash = rpc_call(client, url, user, pass, "getblockhash", vec![json!(height)])?;
     let hash_str = hash.as_str().context("no hash")?.to_string();
+    let verbosity = match source {
+        FeeSource::Legacy => 2,
+        FeeSource::Prevout => 3,
+    };
     let block = rpc_call(
         client,
         url,
         user,
         pass,
         "getblock",
-        vec![json!(hash_str), json!(2)],
+        vec![json!(hash_str), json!(verbosity)],
     )?;
     let timestamp = block["time"].as_i64().unwrap_or(0);
     let txs = block["tx"].as_array().context("no tx array")?;
     let tx_count = txs.len() as u32;
+    if source == FeeSource::Prevout {
+        let mut total = 0i64;
+        let mut missing = 0usize;
+        for tx in txs {
+            match fee::prevout_fee_zats(tx) {
+                Some(fee) => total += fee,
+                None => missing += 1,
+            }
+        }
+        return Ok((total, timestamp, missing, tx_count));
+    }
     let mut local_cache: LruCache<String, Value> = LruCache::new(NonZeroUsize::new(300).unwrap());
     let mut missing_txids: HashSet<String> = HashSet::new();
     for tx in txs {
-        let is_coinbase = tx["vin"]
-            .as_array()
-            .and_then(|v| v.first())
-            .and_then(|v| v["coinbase"].as_str())
-            .is_some();
-        if is_coinbase {
+        if fee::is_coinbase(tx) {
             continue;
         }
         if let Some(vins) = tx["vin"].as_array() {
@@ -278,10 +371,10 @@ fn calculate_block_fees(
     }
     if !missing_txids.is_empty() {
         if missing_txids.len() > 5000 {
-            println!("⚠️ Very dense block {} ({} transactions but {} unique prev-txids) — using safe fallback mode (on-demand fetching)", height, tx_count, missing_txids.len());
+            println!("Very dense block {} ({} transactions but {} unique prev-txids) — using safe fallback mode (on-demand fetching)", height, tx_count, missing_txids.len());
         } else {
             if missing_txids.len() > 400 {
-                println!("ℹ️ Dense block {} ({} transactions but {} unique prev-txids) — fetching sequentially", height, tx_count, missing_txids.len());
+                println!("Dense block {} ({} transactions but {} unique prev-txids) — fetching sequentially", height, tx_count, missing_txids.len());
             }
             let txids_vec: Vec<String> = missing_txids.into_iter().collect();
             for txid in txids_vec {
@@ -301,12 +394,7 @@ fn calculate_block_fees(
     let mut total = 0i64;
     let mut total_fallbacks = 0usize;
     for (i, tx) in txs.iter().enumerate() {
-        let is_coinbase = tx["vin"]
-            .as_array()
-            .and_then(|v| v.first())
-            .and_then(|v| v["coinbase"].as_str())
-            .is_some();
-        if is_coinbase {
+        if fee::is_coinbase(tx) {
             continue;
         }
         let (fee, misses) =
@@ -327,69 +415,34 @@ fn calculate_fee_from_tx(
     debug: bool,
     tx_index: usize,
 ) -> Result<(i64, usize)> {
-    let mut vin_sum: i64 = 0;
-    let mut fallback_count: usize = 0;
-    if let Some(vins) = tx["vin"].as_array() {
-        for vin in vins {
-            if let (Some(ptxid), Some(idx)) = (vin["txid"].as_str(), vin["vout"].as_u64()) {
-                let ptxid_str = ptxid.to_string();
-                let prev_tx = if let Some(entry) = local_cache.get(&ptxid_str) {
-                    entry.clone()
-                } else {
-                    if debug {
-                        eprintln!("Cache miss on {} (block {})", ptxid_str, tx_index);
-                    }
-                    let fetched = rpc_call(
-                        client,
-                        url,
-                        user,
-                        pass,
-                        "getrawtransaction",
-                        vec![json!(ptxid), json!(1)],
-                    )?;
-                    local_cache.put(ptxid_str.clone(), fetched.clone());
-                    fallback_count += 1;
-                    fetched
-                };
-                if let Some(vout_arr) = prev_tx["vout"].as_array() {
-                    if let Some(vout) = vout_arr.get(idx as usize) {
-                        if let Some(v) = vout["valueZat"].as_i64() {
-                            vin_sum += v;
-                        }
-                    }
-                }
+    let (fee, misses) = fee::legacy_fee_zats(tx, |ptxid, idx| {
+        let ptxid_str = ptxid.to_string();
+        let prev_tx = if let Some(entry) = local_cache.get(&ptxid_str) {
+            entry.clone()
+        } else {
+            if debug {
+                eprintln!("Cache miss on {} (tx index {})", ptxid_str, tx_index);
             }
-        }
-    }
-    let vout_sum: i64 = tx["vout"]
-        .as_array()
-        .map(|a| a.iter().filter_map(|v| v["valueZat"].as_i64()).sum())
-        .unwrap_or(0);
-    let mut vpub_old = 0i64;
-    let mut vpub_new = 0i64;
-    if let Some(js) = tx["vjoinsplit"].as_array() {
-        for j in js {
-            vpub_old += j["vpub_oldZat"].as_i64().unwrap_or(0);
-            vpub_new += j["vpub_newZat"].as_i64().unwrap_or(0);
-        }
-    }
-    let sapling = tx["valueBalanceZat"].as_i64().unwrap_or(0);
-    let orchard = tx["orchard"]
-        .as_object()
-        .and_then(|o| o["valueBalanceZat"].as_i64())
-        .unwrap_or(0);
-    // Ironwood (NU6.3) value balance — required post-activation (height >= 3428143)
-    let ironwood = tx["ironwood"]
-        .as_object()
-        .and_then(|o| o["valueBalanceZat"].as_i64())
-        .unwrap_or(0);
-    let fee = vin_sum - vout_sum - vpub_old + vpub_new + sapling + orchard + ironwood;
-    Ok((fee, fallback_count))
+            let fetched = rpc_call(
+                client,
+                url,
+                user,
+                pass,
+                "getrawtransaction",
+                vec![json!(ptxid), json!(1)],
+            )
+            .ok()?;
+            local_cache.put(ptxid_str, fetched.clone());
+            fetched
+        };
+        prev_tx["vout"]
+            .as_array()
+            .and_then(|vout_arr| vout_arr.get(idx as usize))
+            .and_then(|vout| vout["valueZat"].as_i64())
+    });
+    Ok((fee, misses))
 }
 
-// ────────────────────────────────────────────────
-// Helper functions (unchanged)
-// ────────────────────────────────────────────────
 fn get_credentials(args: &Args) -> Result<(String, String)> {
     if let (Some(u), Some(p)) = (&args.user, &args.pass) {
         return Ok((u.clone(), p.clone()));
@@ -422,24 +475,6 @@ fn read_cookie_file(p: &PathBuf) -> Result<(String, String)> {
     let line = s.lines().next().context("empty cookie")?.trim();
     let (u, pw) = line.split_once(':').context("bad cookie format")?;
     Ok((u.trim().to_string(), pw.trim().to_string()))
-}
-
-fn get_credentials_from_env_or_cookie() -> Result<(String, String)> {
-    let home = dirs::home_dir().context("no home dir")?;
-    let candidates = vec![
-        home.join(".cache").join("zebra").join(".cookie"),
-        home.join(".zcash").join(".cookie"),
-        PathBuf::from(".cookie"),
-        "/var/lib/zebrad-rpc/.cookie".to_string().into(),
-    ];
-    for p in candidates {
-        if p.exists() {
-            if let Ok(creds) = read_cookie_file(&p) {
-                return Ok(creds);
-            }
-        }
-    }
-    Ok((String::new(), String::new()))
 }
 
 fn rpc_call(
