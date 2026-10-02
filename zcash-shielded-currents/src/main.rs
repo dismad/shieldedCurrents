@@ -12,6 +12,14 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::Semaphore;
+
+mod fee;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+enum FeeSource {
+    Legacy,
+    Prevout,
+}
 #[derive(Parser, Debug)]
 #[command(author, version, about, arg_required_else_help = true)]
 struct Args {
@@ -35,6 +43,15 @@ struct Args {
     parallel: usize,
     #[arg(long, default_value_t = false)]
     skip_fees: bool,
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = FeeSource::Prevout,
+        help = "prevout (default) reads getblock verbosity 3 and requires zebrad >= 7.0.0-rc.0. legacy fetches inputs with getrawtransaction"
+    )]
+    fee_source: FeeSource,
+    #[arg(long, help = "Time legacy and verbosity-3 fee paths. Does not write reports.")]
+    compare: bool,
     #[arg(long, default_value_t = 480)]
     batch_size: usize,
     #[arg(long, default_value_t = false)]
@@ -44,6 +61,7 @@ struct Args {
 struct Vin {
     coinbase: Option<String>,
     txid: Option<String>,
+    #[allow(dead_code)]
     vout: Option<u32>,
 }
 #[derive(Deserialize, Debug, Clone, Default)]
@@ -100,6 +118,7 @@ struct TxMetrics {
     vshielded_count: u32,
     orchard_count: u32,
     ironwood_count: u32,
+    fee_known: bool,
 }
 #[derive(Clone)]
 struct Rpc {
@@ -199,14 +218,14 @@ impl Rpc {
         }
         Ok(results)
     }
-    async fn get_block(&self, height: u32) -> Result<Value> {
-        if let Ok(block) = self.rpc("getblock", serde_json::json!([height, 2])).await {
+    async fn get_block(&self, height: u32, verbosity: u8) -> Result<Value> {
+        if let Ok(block) = self.rpc("getblock", serde_json::json!([height, verbosity])).await {
             return Ok(block);
         }
         let hash: String = self
             .rpc("getblockhash", serde_json::json!([height]))
             .await?;
-        self.rpc("getblock", serde_json::json!([hash, 2])).await
+        self.rpc("getblock", serde_json::json!([hash, verbosity])).await
     }
 }
 fn detect_pools_and_values(
@@ -302,9 +321,11 @@ async fn process_block(
     skipped: Arc<AtomicU32>,
     rpc_errors: Arc<AtomicU32>,
     verbose: bool,
+    fee_source: FeeSource,
 ) -> Vec<TxMetrics> {
     let mut res = Vec::new();
-    let block_data = match rpc.get_block(height).await {
+    let verbosity = if calculate_fees && fee_source == FeeSource::Prevout { 3 } else { 2 };
+    let block_data = match rpc.get_block(height, verbosity).await {
         Ok(b) => b,
         Err(e) => {
             let msg = e.to_string();
@@ -334,7 +355,7 @@ async fn process_block(
                 println!("Block {}: {} transactions", height, txs.len());
             }
             // === Per-block batch pre-fetch for missing prevouts ===
-            if calculate_fees {
+            if calculate_fees && fee_source == FeeSource::Legacy {
                 let mut needed = HashSet::new();
                 for tx_json in txs {
                     if let Ok(tx) = serde_json::from_value::<RawTx>(tx_json.clone()) {
@@ -391,32 +412,21 @@ async fn process_block(
                             ironwood_count,
                         ) = detect_pools_and_values(&tx);
                         // ==================== CORRECT FEE CALCULATION (matches zcash-block-fees) ====================
-                        let fee_zat = if !calculate_fees || is_cb {
-                            0
+                        let (fee_zat, fee_known) = if !calculate_fees || is_cb {
+                            (0, true)
+                        } else if fee_source == FeeSource::Prevout {
+                            match fee::prevout_fee_zats(tx_json) {
+                                Some(fee) => (fee, true),
+                                None => (0, false),
+                            }
                         } else {
-                            let mut input_sum = 0i64;
-                            for vin in &tx.vin {
-                                if let (Some(txid), Some(vout_idx)) = (&vin.txid, vin.vout) {
-                                    let cache = rpc.prevout_cache.lock().unwrap();
-                                    if let Some(vals) = cache.get(txid) {
-                                        if (vout_idx as usize) < vals.len() {
-                                            input_sum += vals[vout_idx as usize];
-                                        }
-                                    }
-                                }
-                            }
-                            let output_sum = tx.vout.iter().map(|v| v.value_zat).sum::<i64>();
-                            // Sprout vjoinsplit handling (vpub_old / vpub_new) - this was the missing piece
-                            let mut vpub_old = 0i64;
-                            let mut vpub_new = 0i64;
-                            if let Some(js) = &tx.v_joinsplit {
-                                for j in js {
-                                    vpub_old += j["vpub_oldZat"].as_i64().unwrap_or(0);
-                                    vpub_new += j["vpub_newZat"].as_i64().unwrap_or(0);
-                                }
-                            }
-                            // Official Zcash fee formula (value balances for Sapling/Orchard/Ironwood)
-                            input_sum - output_sum - vpub_old + vpub_new + s_zat + o_zat + i_zat
+                            let (fee, misses) = fee::legacy_fee_zats(tx_json, |txid, vout_idx| {
+                                let cache = rpc.prevout_cache.lock().unwrap();
+                                cache
+                                    .get(txid)
+                                    .and_then(|vals| vals.get(vout_idx as usize).copied())
+                            });
+                            (fee, misses == 0)
                         };
                         // ============================================================================================
                         res.push(TxMetrics {
@@ -436,6 +446,7 @@ async fn process_block(
                             vshielded_count,
                             orchard_count,
                             ironwood_count,
+                            fee_known,
                         });
                     }
                     Err(e) => {
@@ -455,7 +466,7 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     let out_dir = Path::new(&args.out);
     fs::create_dir_all(out_dir)?;
-    let rpc = Arc::new(Rpc::new(args.rpc.clone(), args.cookie_file)?);
+    let rpc = Arc::new(Rpc::new(args.rpc.clone(), args.cookie_file.clone())?);
     let start_time = Instant::now();
     if let Err(e) = rpc
         .rpc::<Value>("getblockchaininfo", serde_json::json!([]))
@@ -475,13 +486,17 @@ async fn main() -> Result<()> {
         println!("Chain: {}", info["chain"]);
         println!("Best block hash: {}", info["bestblockhash"]);
         let test_height = if tip > 1000 { tip - 1000 } else { tip / 2 };
-        match rpc.get_block(test_height).await {
+        match rpc.get_block(test_height, 2).await {
             Ok(block) => println!("getblock({}) succeeded", block["height"]),
             Err(e) => println!("getblock failed (normal for recent blocks): {}", e),
         }
         println!("Diagnostics complete.");
         let elapsed = start_time.elapsed();
         println!("Completed in {:.2} seconds", elapsed.as_secs_f64());
+        return Ok(());
+    }
+    if args.compare {
+        run_compare(rpc.clone(), &args, start_time).await?;
         return Ok(());
     }
     if let Some(height) = args.block {
@@ -504,9 +519,18 @@ async fn main() -> Result<()> {
             skipped.clone(),
             rpc_errors.clone(),
             args.verbose,
+            args.fee_source,
         )
         .await;
         println!("Block {} processed: {} transactions", height, metrics.len());
+        println!(
+            "Fee source: {:?} (prevout requires zebrad >= 7.0.0-rc.0)",
+            args.fee_source
+        );
+        println!(
+            "Transactions with an unknown fee: {}",
+            metrics.iter().filter(|m| !m.fee_known).count()
+        );
         write_myresults_md(&metrics, out_dir)?;
         write_summary_md(&metrics, height, height, out_dir, &rpc).await?;
         write_pool_currents(&metrics, out_dir)?;
@@ -541,17 +565,20 @@ async fn main() -> Result<()> {
             let rpc_errors_clone = rpc_errors.clone();
             let batch_size = args.batch_size;
             let verbose = args.verbose;
+            let fee_source = args.fee_source;
+            let calculate_fees = !args.skip_fees;
             tokio::spawn(async move {
                 let _permit = sem_clone.acquire().await.unwrap();
                 process_block(
                     rpc_clone,
                     h,
                     true,
-                    !args.skip_fees,
+                    calculate_fees,
                     batch_size,
                     skipped_clone,
                     rpc_errors_clone,
                     verbose,
+                    fee_source,
                 )
                 .await
             })
@@ -566,6 +593,12 @@ async fn main() -> Result<()> {
     let total_skipped = skipped.load(Ordering::Relaxed);
     let total_errors = rpc_errors.load(Ordering::Relaxed);
     println!("Processed {} transactions", all_metrics.len());
+    let missing_fees = all_metrics.iter().filter(|m| !m.fee_known).count();
+    println!(
+        "Fee source: {:?} (prevout requires zebrad >= 7.0.0-rc.0)",
+        args.fee_source
+    );
+    println!("Transactions with an unknown fee: {}", missing_fees);
     println!(
         "Error summary: {} blocks skipped | {} RPC errors",
         total_skipped, total_errors
@@ -579,6 +612,89 @@ async fn main() -> Result<()> {
     println!("Completed in {:.2} seconds", elapsed.as_secs_f64());
     Ok(())
 }
+async fn run_compare(rpc: Arc<Rpc>, args: &Args, start_time: Instant) -> Result<()> {
+    let info: Value = rpc.rpc("getblockchaininfo", serde_json::json!([])).await?;
+    let tip: u32 = info["blocks"].as_u64().context("no blocks field")? as u32;
+    let (start, end) = if let (Some(f), Some(t)) = (args.from, args.to) {
+        (f, t)
+    } else if let Some(height) = args.block {
+        (height, height)
+    } else {
+        let end = tip;
+        let start = end.saturating_sub(args.last.saturating_sub(1));
+        (start, end)
+    };
+    println!(
+        "Compare blocks {}-{} . Legacy runs first, so verbosity 3 may see a warm cache.",
+        start, end
+    );
+    let (legacy_fees, legacy_n, legacy_miss, legacy_secs) =
+        time_fee_path(rpc.clone(), args, start, end, FeeSource::Legacy).await?;
+    let (prevout_fees, prevout_n, prevout_miss, prevout_secs) =
+        time_fee_path(rpc, args, start, end, FeeSource::Prevout).await?;
+    let speedup = if prevout_secs > 0.0 { legacy_secs / prevout_secs } else { 0.0 };
+    println!("\n=== FEE PATH COMPARE ===");
+    println!(
+        "legacy   {:>8.2}s  txs {}  missing {}  fee {} zat",
+        legacy_secs, legacy_n, legacy_miss, legacy_fees
+    );
+    println!(
+        "prevout  {:>8.2}s  txs {}  missing {}  fee {} zat",
+        prevout_secs, prevout_n, prevout_miss, prevout_fees
+    );
+    println!("prevout / legacy time: {:.2}x", speedup);
+    println!("fee delta (prevout - legacy): {} zat", prevout_fees - legacy_fees);
+    println!("Missing inputs are excluded from the fee total, not counted as zero.");
+    println!("Completed in {:.2} seconds", start_time.elapsed().as_secs_f64());
+    Ok(())
+}
+
+async fn time_fee_path(
+    rpc: Arc<Rpc>,
+    args: &Args,
+    start: u32,
+    end: u32,
+    fee_source: FeeSource,
+) -> Result<(i64, usize, usize, f64)> {
+    let started = Instant::now();
+    let semaphore = Arc::new(Semaphore::new(args.parallel));
+    let skipped = Arc::new(AtomicU32::new(0));
+    let rpc_errors = Arc::new(AtomicU32::new(0));
+    let tasks: Vec<_> = (start..=end)
+        .map(|h| {
+            let rpc_clone = rpc.clone();
+            let sem_clone = semaphore.clone();
+            let skipped_clone = skipped.clone();
+            let rpc_errors_clone = rpc_errors.clone();
+            let batch_size = args.batch_size;
+            tokio::spawn(async move {
+                let _permit = sem_clone.acquire().await.unwrap();
+                process_block(
+                    rpc_clone,
+                    h,
+                    true,
+                    true,
+                    batch_size,
+                    skipped_clone,
+                    rpc_errors_clone,
+                    false,
+                    fee_source,
+                )
+                .await
+            })
+        })
+        .collect();
+    let all_results = join_all(tasks).await;
+    let metrics: Vec<TxMetrics> = all_results.into_iter().filter_map(|r| r.ok()).flatten().collect();
+    let missing = metrics.iter().filter(|m| !m.fee_known).count();
+    let fees = metrics
+        .iter()
+        .filter(|m| m.fee_known)
+        .map(|m| (m.fee_zec * 100_000_000.0).round() as i64)
+        .sum();
+    Ok((fees, metrics.len(), missing, started.elapsed().as_secs_f64()))
+}
+
 fn format_date(ts: u64) -> String {
     DateTime::<Utc>::from_timestamp(ts as i64, 0)
         .unwrap_or_default()
@@ -596,14 +712,19 @@ fn write_myresults_md(metrics: &[TxMetrics], out: &Path) -> Result<()> {
     for m in metrics {
         let date = format_date(m.time);
         let cb = if m.is_coinbase { "IsCoinbase" } else { "" };
+        let fee = if m.fee_known {
+            format!("{:.8}", m.fee_zec)
+        } else {
+            "unknown".to_string()
+        };
         writeln!(
             f,
-            "{} | {} | {} | {} | {:.8} | {:.8} | {:.8} | {:.8} | {:.8} | {:.8} | {} | {}",
+            "{} | {} | {} | {} | {} | {:.8} | {:.8} | {:.8} | {:.8} | {:.8} | {} | {}",
             date,
             m.block,
             m.txid,
             m.transfers,
-            m.fee_zec,
+            fee,
             m.value_out,
             m.transparent,
             m.sapling,
