@@ -6,6 +6,7 @@ members = [
     "zcash-shielded-currents",
     "zcash-supply-history",
     "zcash-tx-fee",
+    "zcash-pool-supply", 
 ]
 
 [workspace.package]
