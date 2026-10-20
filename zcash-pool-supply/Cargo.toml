@@ -1,5 +1,4 @@
-[package]
-name = "extract-pool-supply"
+name = "zcash-pool-supply"
 version = "0.1.0"
 edition = "2021"
 
